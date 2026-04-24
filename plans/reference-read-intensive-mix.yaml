@@ -1,0 +1,49 @@
+name: reference-read-intensive-mix
+endpoint: https://eu-central-1.storage.impossibleapi.net
+region: eu-central-1
+bucket: bench-scratch
+
+defaults:
+  duration: 10m
+  threads: 256
+  warmup: 30s
+
+workloads:
+  - name: read-mix
+    type: mix
+    params:
+      workloads:
+        - name: dataloader
+          type: training_data
+          weight: 2
+          params:
+            object_count: 10000
+            size_mean: 524288          # 512 KiB
+            size_sigma: 0.8
+            size_min: 65536
+            size_max: 4194304
+            access_pattern: zipfian
+            zipfian_s: 1.07
+        - name: lance-range
+          type: lancedb
+          weight: 2
+          params:
+            fragments: 50
+            fragment_size: 67108864    # 64 MiB
+            manifest_count: 50
+            read_ratio: 1.0
+            range_min: 4096
+            range_max: 4194304
+        - name: md-list
+          type: metadata
+          weight: 1
+          object_size: 1024
+          params:
+            prefix_fanout: 4
+            prefix_depth: 2
+            objects_per_prefix: 25
+
+output:
+  text: ./reports/read-intensive-mix.txt
+  json: ./reports/read-intensive-mix.json
+  progress: true

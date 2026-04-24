@@ -1,0 +1,24 @@
+name: perf-40gbps
+endpoint: https://eu-central-1.storage.impossibleapi.net
+region: eu-central-1
+bucket: bench-scratch
+
+defaults:
+  duration: 5m
+  threads: 32
+  warmup: 30s
+  multipart_part_size: 16MiB
+  multipart_concurrency: 8
+  connection_pool_size: 8192
+
+workloads:
+  - name: throughput
+    type: largeobject
+    object_size: 10GiB
+    params:
+      read_ratio: 1.0
+
+output:
+  text: ./reports/perf-40gbps.txt
+  json: ./reports/perf-40gbps.json
+  progress: true

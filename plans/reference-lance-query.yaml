@@ -1,0 +1,31 @@
+name: reference-lance-query
+endpoint: https://eu-central-1.storage.impossibleapi.net
+region: eu-central-1
+bucket: bench-scratch
+
+defaults:
+  duration: 10m
+  threads: 256
+  warmup: 30s
+  multipart_part_size: 16MiB
+  multipart_concurrency: 4
+
+workloads:
+  - name: lance-query
+    type: lancedb
+    params:
+      fragments: 500
+      fragment_size: 134217728   # 128 MiB
+      manifest_count: 200
+      manifest_min_size: 1024
+      manifest_max_size: 65536
+      read_ratio: 0.8
+      range_mean: 65536
+      range_sigma: 1.5
+      range_min: 4096
+      range_max: 4194304
+
+output:
+  text: ./reports/lance-query.txt
+  json: ./reports/lance-query.json
+  progress: true

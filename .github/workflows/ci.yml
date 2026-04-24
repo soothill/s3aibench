@@ -1,0 +1,84 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    services:
+      minio:
+        image: quay.io/minio/minio:latest
+        env:
+          MINIO_ROOT_USER: minio
+          MINIO_ROOT_PASSWORD: miniominio
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - name: go vet
+        run: go vet ./...
+      - name: coverage gate
+        run: make coverage
+      - name: validate every reference plan
+        run: |
+          go build -o s3aibench ./cmd/s3aibench
+          for p in plans/*.yaml; do
+            echo "==> $p"
+            ./s3aibench validate --plan "$p"
+          done
+      - name: MinIO smoke test
+        env:
+          AWS_ACCESS_KEY_ID: minio
+          AWS_SECRET_ACCESS_KEY: miniominio
+        run: |
+          # Set up a test bucket via mc, then run a tiny end-to-end bench.
+          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
+          chmod +x mc
+          ./mc alias set local http://localhost:9000 "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
+          ./mc mb local/ci-smoke
+          cat > /tmp/ci-smoke.yaml <<'YAML'
+          name: ci-smoke
+          endpoint: http://localhost:9000
+          region: us-east-1
+          path_style: true
+          bucket: ci-smoke
+          access_key: minio
+          secret_key: miniominio
+          defaults:
+            duration: 5s
+            threads: 4
+          workloads:
+            - name: s
+              type: smallobject
+              object_size: 1024
+              params:
+                read_ratio: 0.5
+          output:
+            json: ./ci-smoke.json
+          YAML
+          ./s3aibench run --plan /tmp/ci-smoke.yaml
+          test -s ci-smoke.json
+          grep -q '"schema_version": "1.0.0"' ci-smoke.json
+
+  cross-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - run: make cross

@@ -1,0 +1,23 @@
+name: reference-metadata
+endpoint: https://eu-central-1.storage.impossibleapi.net
+region: eu-central-1
+bucket: bench-scratch
+
+defaults:
+  duration: 5m
+  threads: 128
+  warmup: 15s
+
+workloads:
+  - name: metadata-stress
+    type: metadata
+    object_size: 1KiB
+    params:
+      prefix_fanout: 4
+      prefix_depth: 3
+      objects_per_prefix: 50
+
+output:
+  text: ./reports/metadata.txt
+  json: ./reports/metadata.json
+  progress: true

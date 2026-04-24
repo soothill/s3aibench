@@ -1,0 +1,26 @@
+name: reference-checkpoint-10gib
+endpoint: https://eu-central-1.storage.impossibleapi.net
+region: eu-central-1
+bucket: bench-scratch
+
+defaults:
+  duration: 30m
+  threads: 1
+  warmup: 30s
+  multipart_part_size: 16MiB
+  multipart_concurrency: 8
+
+workloads:
+  - name: checkpoint
+    type: checkpointing
+    object_size: 10GiB
+    params:
+      writers: 8
+      retain_versions: 3
+      burst_interval: 5m
+      resume: true
+
+output:
+  text: ./reports/checkpoint-10gib.txt
+  json: ./reports/checkpoint-10gib.json
+  progress: true
