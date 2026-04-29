@@ -99,6 +99,33 @@ func TestCleanupSkipsNotFound(t *testing.T) {
 	}
 }
 
+func TestCleanupDeletesVersionsFirst(t *testing.T) {
+	c := fake.New()
+	_ = c.Put(context.Background(), "s3aibench/current", bytes.NewReader([]byte{}), 0)
+	wc := &versionCleaner{Client: c, deleted: 2}
+	n, err := Cleanup(context.Background(), wc, "s3aibench/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("deleted %d", n)
+	}
+	if !wc.called {
+		t.Fatal("version cleanup was not called")
+	}
+}
+
+func TestCleanupVersionError(t *testing.T) {
+	wc := &versionCleaner{Client: fake.New(), deleted: 2, err: errors.New("version delete down")}
+	n, err := Cleanup(context.Background(), wc, "s3aibench/")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if n != 2 {
+		t.Fatalf("deleted %d", n)
+	}
+}
+
 func TestCleanupTruncatedPagination(t *testing.T) {
 	c := fake.New()
 	// Use our fake's default page size via many keys; fake truncates at maxKeys=1000 but

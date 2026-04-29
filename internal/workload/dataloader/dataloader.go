@@ -6,9 +6,7 @@ package dataloader
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/darrensoothill/s3aibench/internal/bodygen"
@@ -26,20 +24,20 @@ const TypeName = "training_data"
 // Register wires the factory.
 func Register() {
 	workload.Register(TypeName, func(w plan.Workload) (workload.Workload, error) {
-		count := intParam(w.Params, "object_count", 1000)
+		count := workload.IntParam(w.Params, "object_count", 1000)
 		if count <= 0 {
 			return nil, fmt.Errorf("dataloader %q: object_count must be >0", w.Name)
 		}
-		sizeMean := sizeParam(w.Params, "size_mean", 512*1024)
-		sigma := floatParam(w.Params, "size_sigma", 0.8)
-		sizeMin := sizeParam(w.Params, "size_min", 64*1024)
-		sizeMax := sizeParam(w.Params, "size_max", 4*1024*1024)
-		pattern := stringParam(w.Params, "access_pattern", "shuffled")
+		sizeMean := workload.SizeParam(w.Params, "size_mean", 512*1024)
+		sigma := workload.FloatParam(w.Params, "size_sigma", 0.8)
+		sizeMin := workload.SizeParam(w.Params, "size_min", 64*1024)
+		sizeMax := workload.SizeParam(w.Params, "size_max", 4*1024*1024)
+		pattern := workload.StringParam(w.Params, "access_pattern", "shuffled")
 		if pattern != "sequential" && pattern != "shuffled" && pattern != "zipfian" {
 			return nil, fmt.Errorf("dataloader %q: access_pattern %q not supported", w.Name, pattern)
 		}
-		zs := floatParam(w.Params, "zipfian_s", 1.07)
-		rangeProb := floatParam(w.Params, "range_probability", 0.0)
+		zs := workload.FloatParam(w.Params, "zipfian_s", 1.07)
+		rangeProb := workload.FloatParam(w.Params, "range_probability", 0.0)
 		return &Workload{
 			name: w.Name, keyPrefix: w.Name + "/obj-",
 			objectCount: count,
@@ -65,7 +63,6 @@ type Workload struct {
 	rangeProb   float64
 
 	keys []string
-	seq  atomic.Int64
 }
 
 func (w *Workload) Name() string { return w.name }
@@ -120,7 +117,7 @@ func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 		go func(id int) {
 			defer wg.Done()
 			local := workload.WorkerRand(env, id)
-			rec := env.Recorder.ShardFor(id)
+			rec := env.ShardRecorder(id)
 			// Per-worker Zipfian — lock-free on the hot path.
 			var zipf *sizedist.Zipfian
 			if zipfTemplate != nil {
@@ -133,7 +130,7 @@ func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 			seed := uint64(id)*0x9E3779B97F4A7C15 + 1
 			for ctx.Err() == nil {
 				counter++
-				k := w.nextKey(seed, counter, zipf, keys)
+				k := w.nextKey(id, env.Threads, seed, counter, zipf, keys)
 				if local.Float64() < w.rangeProb {
 					w.doRangeGet(ctx, env, rec, k)
 				} else {
@@ -146,16 +143,26 @@ func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 	return nil
 }
 
-func (w *Workload) nextKey(seed, counter uint64, z *sizedist.Zipfian, keys []string) string {
+func (w *Workload) nextKey(workerID, threads int, seed, counter uint64, z *sizedist.Zipfian, keys []string) string {
 	switch w.pattern {
 	case "sequential":
-		i := int(w.seq.Add(1)-1) % len(keys)
+		i := sequentialIndex(workerID, threads, counter, len(keys))
 		return keys[i]
 	case "zipfian":
 		return keys[z.Sample()]
 	default: // "shuffled"
 		return keys[int(mix64(seed+counter)%uint64(len(keys)))]
 	}
+}
+
+func sequentialIndex(workerID, threads int, counter uint64, total int) int {
+	if total == 0 {
+		return 0
+	}
+	if threads <= 0 {
+		threads = 1
+	}
+	return (workerID + int(counter-1)*threads) % total
 }
 
 // mix64 is splitmix64 — a well-known 64-bit integer finaliser with excellent
@@ -201,56 +208,4 @@ func (w *Workload) Cleanup(ctx context.Context, env *workload.Env) error {
 		}
 	}
 	return nil
-}
-
-// -- helpers -----------------------------------------------------------------
-
-func intParam(p map[string]interface{}, key string, def int) int {
-	if v, ok := p[key]; ok {
-		if f, fok := v.(float64); fok {
-			return int(f)
-		}
-		if i, iok := v.(int); iok {
-			return i
-		}
-	}
-	return def
-}
-
-func sizeParam(p map[string]interface{}, key string, def int64) int64 {
-	if v, ok := p[key]; ok {
-		if f, fok := v.(float64); fok {
-			return int64(f)
-		}
-		if i, iok := v.(int); iok {
-			return int64(i)
-		}
-	}
-	return def
-}
-
-func floatParam(p map[string]interface{}, key string, def float64) float64 {
-	if v, ok := p[key]; ok {
-		if f, fok := v.(float64); fok {
-			return f
-		}
-		if i, iok := v.(int); iok {
-			return float64(i)
-		}
-		if s, sok := v.(string); sok {
-			if parsed, err := strconv.ParseFloat(s, 64); err == nil {
-				return parsed
-			}
-		}
-	}
-	return def
-}
-
-func stringParam(p map[string]interface{}, key, def string) string {
-	if v, ok := p[key]; ok {
-		if s, sok := v.(string); sok {
-			return s
-		}
-	}
-	return def
 }

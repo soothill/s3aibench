@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
@@ -46,10 +47,12 @@ type AWS struct {
 // NewAWS constructs a Client backed by the AWS SDK v2.
 func NewAWS(cfg AWSConfig) *AWS {
 	opts := s3.Options{
-		Region:       cfg.Region,
-		UsePathStyle: cfg.PathStyle,
-		HTTPClient:   cfg.HTTPClient,
-		Credentials:  aws.NewCredentialsCache(cfg.Credentials),
+		Region:                     cfg.Region,
+		UsePathStyle:               cfg.PathStyle,
+		HTTPClient:                 cfg.HTTPClient,
+		Credentials:                aws.NewCredentialsCache(cfg.Credentials),
+		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
+		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
 	}
 	maxRetries := cfg.MaxRetries
 	if maxRetries <= 0 {
@@ -129,6 +132,81 @@ func (a *AWS) Delete(ctx context.Context, key string) error {
 		Bucket: aws.String(a.bucket), Key: aws.String(a.key(key)),
 	})
 	return err
+}
+
+// DeleteVersions permanently removes all object versions and delete markers
+// under prefix. It is used by cleanup for versioned S3-compatible buckets.
+func (a *AWS) DeleteVersions(ctx context.Context, prefix string) (int, error) {
+	fullPrefix := a.key(prefix)
+	var keyMarker, versionMarker string
+	deleted := 0
+	for {
+		in := &s3.ListObjectVersionsInput{
+			Bucket:  aws.String(a.bucket),
+			Prefix:  aws.String(fullPrefix),
+			MaxKeys: aws.Int32(1000),
+		}
+		if keyMarker != "" {
+			in.KeyMarker = aws.String(keyMarker)
+		}
+		if versionMarker != "" {
+			in.VersionIdMarker = aws.String(versionMarker)
+		}
+		out, err := a.api.ListObjectVersions(ctx, in)
+		if err != nil {
+			if isUnsupportedVersionListing(err) {
+				return deleted, nil
+			}
+			return deleted, err
+		}
+		objects := make([]types.ObjectIdentifier, 0, len(out.Versions)+len(out.DeleteMarkers))
+		for _, v := range out.Versions {
+			objects = append(objects, types.ObjectIdentifier{Key: v.Key, VersionId: v.VersionId})
+		}
+		for _, m := range out.DeleteMarkers {
+			objects = append(objects, types.ObjectIdentifier{Key: m.Key, VersionId: m.VersionId})
+		}
+		if len(objects) > 0 {
+			n, err := a.deleteObjectVersions(ctx, objects)
+			if err != nil {
+				return deleted, err
+			}
+			deleted += n
+		}
+		if out.IsTruncated == nil || !*out.IsTruncated {
+			return deleted, nil
+		}
+		keyMarker = aws.ToString(out.NextKeyMarker)
+		versionMarker = aws.ToString(out.NextVersionIdMarker)
+	}
+}
+
+func (a *AWS) deleteObjectVersions(ctx context.Context, objects []types.ObjectIdentifier) (int, error) {
+	out, err := a.api.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		Bucket: aws.String(a.bucket),
+		Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)},
+	})
+	if err != nil {
+		return 0, err
+	}
+	if len(out.Errors) > 0 {
+		e := out.Errors[0]
+		return 0, fmt.Errorf("delete object version %q: %s: %s", aws.ToString(e.Key), aws.ToString(e.Code), aws.ToString(e.Message))
+	}
+	return len(objects), nil
+}
+
+func isUnsupportedVersionListing(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.ErrorCode() {
+	case "NotImplemented", "NotSupported", "MethodNotAllowed":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *AWS) List(ctx context.Context, prefix, delimiter, token string, maxKeys int32) (*ListResult, error) {

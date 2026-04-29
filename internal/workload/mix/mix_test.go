@@ -15,10 +15,10 @@ import (
 )
 
 type stub struct {
-	name                                          string
-	runCalls, prepopCalls, cleanupCalls           atomic.Int32
-	prepopErr, runErr, cleanupErr                 error
-	capturedThreads                               atomic.Int32
+	name                                string
+	runCalls, prepopCalls, cleanupCalls atomic.Int32
+	prepopErr, runErr, cleanupErr       error
+	capturedThreads                     atomic.Int32
 }
 
 func (s *stub) Name() string { return s.name }
@@ -132,8 +132,8 @@ func TestMixHappyPath(t *testing.T) {
 }
 
 func TestMixThreadMinimumOne(t *testing.T) {
-	// total weight = 100, env.Threads=1 → one child would round to 0 without the
-	// floor=1 guard.
+	// total weight = 101, env.Threads=1 → allocations must stay within the
+	// requested budget instead of oversubscribing to 2 threads.
 	a := &stub{name: "a"}
 	b := &stub{name: "b"}
 	registerStubs(t, map[string]*stub{"a": a, "b": b})
@@ -146,8 +146,8 @@ func TestMixThreadMinimumOne(t *testing.T) {
 	if err := w.Run(context.Background(), env); err != nil {
 		t.Fatal(err)
 	}
-	if a.capturedThreads.Load() != 1 {
-		t.Fatalf("expected floor=1, got %d", a.capturedThreads.Load())
+	if a.runCalls.Load() != 0 || b.capturedThreads.Load() != 1 {
+		t.Fatalf("unexpected allocation: a calls=%d b threads=%d", a.runCalls.Load(), b.capturedThreads.Load())
 	}
 }
 
@@ -202,7 +202,7 @@ func TestParseNestedParamPassthrough(t *testing.T) {
 	// both branches in parseNested.
 	n, err := parseNested(map[string]interface{}{
 		"name": "a", "type": "stub",
-		"weight":      -5,        // forces weight<=0 → default to 1
+		"weight":      -5, // forces weight<=0 → default to 1
 		"object_size": float64(1024),
 		"params":      map[string]interface{}{"x": "y"},
 	})
@@ -227,5 +227,41 @@ func TestRunZeroTotalWeight(t *testing.T) {
 	w := &Workload{name: "m"}
 	if err := w.Run(context.Background(), makeEnv()); err == nil {
 		t.Fatal("expected total-weight error")
+	}
+}
+
+func TestRunZeroThreads(t *testing.T) {
+	a := &stub{name: "a"}
+	registerStubs(t, map[string]*stub{"a": a})
+	w, _ := workload.Build(mixPlan([]interface{}{
+		map[string]interface{}{"name": "a", "type": "stub"},
+	}))
+	env := makeEnv()
+	env.Threads = 0
+	if err := w.Run(context.Background(), env); err == nil {
+		t.Fatal("expected zero-threads error")
+	}
+}
+
+func TestAllocateThreadsKeepsBudget(t *testing.T) {
+	alloc := allocateThreads(5, []int{1, 1, 1})
+	total := 0
+	for _, n := range alloc {
+		total += n
+	}
+	if total != 5 {
+		t.Fatalf("allocated %d threads", total)
+	}
+}
+
+func TestAllocateThreadsEdgeCases(t *testing.T) {
+	if got := allocateThreads(0, []int{1, 2}); len(got) != 2 || got[0] != 0 || got[1] != 0 {
+		t.Fatalf("zero-thread alloc=%v", got)
+	}
+	if got := allocateThreads(3, nil); len(got) != 0 {
+		t.Fatalf("nil weights alloc=%v", got)
+	}
+	if got := allocateThreads(3, []int{0, 0}); len(got) != 2 || got[0] != 0 || got[1] != 0 {
+		t.Fatalf("zero-weight alloc=%v", got)
 	}
 }

@@ -362,13 +362,13 @@ func TestFlagsIntoOverrides_Setters(t *testing.T) {
 
 func TestParseLogLevel(t *testing.T) {
 	cases := map[string]slog.Level{
-		"debug": slog.LevelDebug,
-		"info":  slog.LevelInfo,
-		"warn":  slog.LevelWarn,
+		"debug":   slog.LevelDebug,
+		"info":    slog.LevelInfo,
+		"warn":    slog.LevelWarn,
 		"warning": slog.LevelWarn,
-		"error": slog.LevelError,
-		"":      slog.LevelInfo,
-		"bogus": slog.LevelInfo,
+		"error":   slog.LevelError,
+		"":        slog.LevelInfo,
+		"bogus":   slog.LevelInfo,
 	}
 	for in, want := range cases {
 		if got := parseLogLevel(in); got != want {
@@ -558,8 +558,13 @@ func TestLoggerFor(t *testing.T) {
 	}
 }
 
-// deletingFailer returns an unrelated (non-NotFound) error on Delete.
+// deletingFailer returns an unrelated cleanup error on Delete and forces the
+// prefix cleanup walker to see at least one key.
 type deletingFailer struct{ *fake.Client }
+
+func (d *deletingFailer) List(ctx context.Context, prefix, delim, token string, maxKeys int32) (*s3client.ListResult, error) {
+	return &s3client.ListResult{Keys: []string{prefix + "leftover"}}, nil
+}
 
 func (d *deletingFailer) Delete(ctx context.Context, key string) error {
 	return errors.New("delete down hard")
@@ -666,5 +671,28 @@ func TestRunRunnerError(t *testing.T) {
 	defaultClientFactory = makeFakeFactory(c)
 	if _, err := runCobra(t, newRunCmd(context.Background()), "--plan", writePlan(t, planSmall)); err == nil {
 		t.Fatal("expected runner error")
+	}
+}
+
+func TestRunCleansPrefixAfterRunnerError(t *testing.T) {
+	c := fake.New()
+	orig := runRunner
+	defer func() { runRunner = orig }()
+	runRunner = func(ctx context.Context, opt runner.Options) (*runner.Result, error) {
+		if err := opt.S3.Put(ctx, opt.RunPrefix+"leftover", strings.NewReader("x"), 1); err != nil {
+			t.Fatal(err)
+		}
+		return nil, errors.New("runner boom")
+	}
+	origF := defaultClientFactory
+	defer func() { defaultClientFactory = origF }()
+	defaultClientFactory = makeFakeFactory(c)
+	if _, err := runCobra(t, newRunCmd(context.Background()), "--plan", writePlan(t, planSmall)); err == nil {
+		t.Fatal("expected runner error")
+	}
+	for key := range c.Objects() {
+		if strings.Contains(key, "leftover") {
+			t.Fatalf("leftover key was not cleaned: %q", key)
+		}
 	}
 }

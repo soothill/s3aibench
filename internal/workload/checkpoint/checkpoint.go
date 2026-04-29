@@ -28,10 +28,10 @@ func Register() {
 		if w.ObjectSize <= 0 {
 			return nil, fmt.Errorf("checkpoint %q: object_size must be >0", w.Name)
 		}
-		writers := intParam(w.Params, "writers", 4)
-		retain := intParam(w.Params, "retain_versions", 3)
-		burst := durationParam(w.Params, "burst_interval", 60*time.Second)
-		resume := boolParam(w.Params, "resume", false)
+		writers := workload.IntParam(w.Params, "writers", 4)
+		retain := workload.IntParam(w.Params, "retain_versions", 3)
+		burst := workload.DurationParam(w.Params, "burst_interval", 60*time.Second)
+		resume := workload.BoolParam(w.Params, "resume", false)
 		return &Workload{
 			name: w.Name, keyPrefix: w.Name + "/ckpt-", objectSize: int64(w.ObjectSize),
 			writers: writers, retain: retain, burstInterval: burst, resume: resume,
@@ -72,7 +72,7 @@ func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 	var wg sync.WaitGroup
 	wg.Add(w.writers)
 	for i := 0; i < w.writers; i++ {
-		rec := env.Recorder.ShardFor(i)
+		rec := env.ShardRecorder(i)
 		go func(rec metrics.Recorder) {
 			defer wg.Done()
 			timer := time.NewTimer(0)
@@ -93,11 +93,19 @@ func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 	if w.resume {
 		wg.Add(1)
 		// Resume reader gets its own shard — avoids contending with writers.
-		resumeRec := env.Recorder.ShardFor(w.writers)
+		resumeRec := env.ShardRecorder(w.writers)
 		go func() {
 			defer wg.Done()
+			timer := time.NewTimer(0)
+			defer timer.Stop()
 			for ctx.Err() == nil {
+				select {
+				case <-ctx.Done():
+					return
+				case <-timer.C:
+				}
 				w.readLatest(ctx, env, resumeRec)
+				timer.Reset(w.burstInterval)
 			}
 		}()
 	}
@@ -171,38 +179,4 @@ func (w *Workload) Cleanup(ctx context.Context, env *workload.Env) error {
 		}
 	}
 	return nil
-}
-
-// -- helpers -----------------------------------------------------------------
-
-func intParam(p map[string]interface{}, key string, def int) int {
-	if v, ok := p[key]; ok {
-		if f, fok := v.(float64); fok {
-			return int(f)
-		}
-		if i, iok := v.(int); iok {
-			return i
-		}
-	}
-	return def
-}
-
-func boolParam(p map[string]interface{}, key string, def bool) bool {
-	if v, ok := p[key]; ok {
-		if b, bok := v.(bool); bok {
-			return b
-		}
-	}
-	return def
-}
-
-func durationParam(p map[string]interface{}, key string, def time.Duration) time.Duration {
-	if v, ok := p[key]; ok {
-		if s, sok := v.(string); sok {
-			if d, err := time.ParseDuration(s); err == nil {
-				return d
-			}
-		}
-	}
-	return def
 }

@@ -18,8 +18,8 @@ import (
 	"sync"
 )
 
-// blockSize is chosen to exceed the largest common S3 part size so any single
-// part read can copy contiguous bytes without wrapping more than once.
+// blockSize is the size of the shared entropy block. Reads can cycle across it
+// multiple times when callers request buffers larger than 1 MiB.
 const blockSize = 1 << 20 // 1 MiB
 
 // entropy is the shared random block. Generated exactly once with crypto/rand
@@ -82,17 +82,18 @@ func (r *Reader) Read(p []byte) (int, error) {
 	if n > remain {
 		n = remain
 	}
-	// Serve contiguous bytes from the block; one call can wrap the block
-	// boundary by continuing inline if needed.
-	startInBlock := r.offset % blockSize
-	avail := int64(blockSize) - startInBlock
-	first := n
-	if first > avail {
-		first = avail
-	}
-	copy(p[:first], entropy[startInBlock:startInBlock+first])
-	if first < n {
-		copy(p[first:n], entropy[:n-first])
+	// Cycle through the entropy block until the destination buffer is filled.
+	written := int64(0)
+	for written < n {
+		startInBlock := (r.offset + written) % blockSize
+		chunk := n - written
+		if avail := int64(blockSize) - startInBlock; chunk > avail {
+			chunk = avail
+		}
+		dstStart := int(written)
+		dstEnd := int(written + chunk)
+		copy(p[dstStart:dstEnd], entropy[startInBlock:startInBlock+chunk])
+		written += chunk
 	}
 	r.offset += n
 	return int(n), nil

@@ -57,3 +57,20 @@ func (n *notFoundDeleter) List(ctx context.Context, prefix, delim, token string,
 func (n *notFoundDeleter) Delete(_ context.Context, _ string) error {
 	return &awsTypesNoSuchKey{}
 }
+
+type versionCleaner struct {
+	*fake.Client
+	deleted int
+	err     error
+	called  bool
+}
+
+func (v *versionCleaner) DeleteVersions(_ context.Context, _ string) (int, error) {
+	v.called = true
+	if v.err != nil {
+		return v.deleted, v.err
+	}
+	return v.deleted, nil
+}
+
+var _ s3client.VersionedCleaner = (*versionCleaner)(nil)

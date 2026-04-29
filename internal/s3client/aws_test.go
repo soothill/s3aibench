@@ -27,6 +27,14 @@ type handler struct {
 	headLen     string
 	statusByKey map[string]int
 	tags        string
+
+	versionListStatus    int
+	versionListErrorCode string
+	versionListResponses []string
+	versionListCalls     int
+	deleteObjectsStatus  int
+	deleteObjectsErrors  bool
+	deleteObjectsCalls   int
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -37,6 +45,33 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case r.Method == "GET" && q.Has("versions"):
+		h.versionListCalls++
+		if h.versionListStatus != 0 {
+			w.WriteHeader(h.versionListStatus)
+			fmt.Fprintf(w, `<Error><Code>%s</Code><Message>boom</Message></Error>`, h.versionListErrorCode)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		idx := h.versionListCalls - 1
+		if idx < len(h.versionListResponses) {
+			fmt.Fprint(w, h.versionListResponses[idx])
+			return
+		}
+		fmt.Fprint(w, listVersionsXML(false, "", ""))
+	case r.Method == "POST" && q.Has("delete"):
+		h.deleteObjectsCalls++
+		if h.deleteObjectsStatus != 0 {
+			w.WriteHeader(h.deleteObjectsStatus)
+			fmt.Fprint(w, `<Error><Code>InternalError</Code><Message>boom</Message></Error>`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		if h.deleteObjectsErrors {
+			fmt.Fprint(w, `<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Error><Key>p/k1</Key><Code>AccessDenied</Code><Message>denied</Message></Error></DeleteResult>`)
+			return
+		}
+		fmt.Fprint(w, `<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></DeleteResult>`)
 	case r.Method == "PUT" && q.Has("tagging"):
 		// PutObjectTagging
 		w.WriteHeader(200)
@@ -88,6 +123,22 @@ func listXML(prefix, delimiter, token string) string {
 		b.WriteString(`<Contents><Key>` + xmlEsc(prefix+"k2") + `</Key></Contents>`)
 	}
 	b.WriteString(`</ListBucketResult>`)
+	return b.String()
+}
+
+func listVersionsXML(truncated bool, nextKey, nextVersion string) string {
+	var b strings.Builder
+	b.WriteString(`<ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	if truncated {
+		b.WriteString(`<IsTruncated>true</IsTruncated>`)
+		b.WriteString(`<NextKeyMarker>` + xmlEsc(nextKey) + `</NextKeyMarker>`)
+		b.WriteString(`<NextVersionIdMarker>` + xmlEsc(nextVersion) + `</NextVersionIdMarker>`)
+	} else {
+		b.WriteString(`<IsTruncated>false</IsTruncated>`)
+	}
+	b.WriteString(`<Version><Key>p/k1</Key><VersionId>v1</VersionId><IsLatest>true</IsLatest></Version>`)
+	b.WriteString(`<DeleteMarker><Key>p/k2</Key><VersionId>d1</VersionId><IsLatest>false</IsLatest></DeleteMarker>`)
+	b.WriteString(`</ListVersionsResult>`)
 	return b.String()
 }
 
@@ -212,6 +263,71 @@ func TestAWSDelete(t *testing.T) {
 	defer srv.Close()
 	if err := a.Delete(context.Background(), "k"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAWSDeleteVersions(t *testing.T) {
+	h := &handler{t: t, versionListResponses: []string{
+		listVersionsXML(true, "p/k2", "d1"),
+		listVersionsXML(false, "", ""),
+	}}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	n, err := a.DeleteVersions(context.Background(), "sub/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 4 {
+		t.Fatalf("deleted %d", n)
+	}
+	if h.versionListCalls != 2 || h.deleteObjectsCalls != 2 {
+		t.Fatalf("list calls=%d delete calls=%d", h.versionListCalls, h.deleteObjectsCalls)
+	}
+}
+
+func TestAWSDeleteVersionsListError(t *testing.T) {
+	h := &handler{t: t, versionListStatus: 500, versionListErrorCode: "InternalError"}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	if _, err := a.DeleteVersions(context.Background(), "sub/"); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestAWSDeleteVersionsUnsupported(t *testing.T) {
+	h := &handler{t: t, versionListStatus: 405, versionListErrorCode: "MethodNotAllowed"}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	n, err := a.DeleteVersions(context.Background(), "sub/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("deleted %d", n)
+	}
+}
+
+func TestAWSDeleteVersionsDeleteError(t *testing.T) {
+	h := &handler{t: t, versionListResponses: []string{listVersionsXML(false, "", "")}, deleteObjectsStatus: 500}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	if _, err := a.DeleteVersions(context.Background(), "sub/"); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestAWSDeleteVersionsEmbeddedDeleteError(t *testing.T) {
+	h := &handler{t: t, versionListResponses: []string{listVersionsXML(false, "", "")}, deleteObjectsErrors: true}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	if _, err := a.DeleteVersions(context.Background(), "sub/"); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestUnsupportedVersionListingPlainError(t *testing.T) {
+	if isUnsupportedVersionListing(errors.New("plain")) {
+		t.Fatal("plain errors are not unsupported-version-listing responses")
 	}
 }
 

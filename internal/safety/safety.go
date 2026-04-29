@@ -43,8 +43,15 @@ func Cleanup(ctx context.Context, c s3client.Client, prefix string) (int, error)
 	if !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
-	var token string
 	deleted := 0
+	if vc, ok := c.(s3client.VersionedCleaner); ok {
+		n, err := vc.DeleteVersions(ctx, prefix)
+		deleted += n
+		if err != nil {
+			return deleted, fmt.Errorf("cleanup versions: %w", err)
+		}
+	}
+	var token string
 	for {
 		res, err := c.List(ctx, prefix, "", token, 1000)
 		if err != nil {

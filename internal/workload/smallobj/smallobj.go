@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math/rand"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -46,11 +47,13 @@ func Register() {
 // Workload is the smallobj implementation. Lock-free: the only shared state
 // is an atomic counter; keys are derived deterministically from the counter.
 type Workload struct {
-	name         string
-	keyPrefix    string // pre-built so keyFor avoids fmt.Sprintf
-	objectSize   int64
-	readRatio    float64
-	writtenCount atomic.Int64 // number of keys written (indices 0..writtenCount-1 valid)
+	name       string
+	keyPrefix  string // pre-built so keyFor avoids fmt.Sprintf
+	objectSize int64
+	readRatio  float64
+	nextIndex  atomic.Int64
+	keysMu     sync.RWMutex
+	keys       []string // successfully written keys
 }
 
 func (w *Workload) Name() string { return w.name }
@@ -66,18 +69,22 @@ func (w *Workload) keyFor(n int64) string {
 // from the first iteration.
 func (w *Workload) Prepopulate(ctx context.Context, env *workload.Env) error {
 	body := bodygen.NewReader(w.objectSize)
-	err := env.S3.Put(ctx, w.keyFor(0), body, w.objectSize)
+	key := w.keyFor(0)
+	err := env.S3.Put(ctx, key, body, w.objectSize)
 	bodygen.Release(body)
 	if err != nil {
 		return err
 	}
-	w.writtenCount.Store(1)
+	w.nextIndex.Store(1)
+	w.keysMu.Lock()
+	w.keys = []string{key}
+	w.keysMu.Unlock()
 	return nil
 }
 
 // Run launches env.Threads workers that loop PUT/GET until ctx is done.
-// Writes use `atomic.Int64.Add` to claim a unique key index; reads pick a
-// random valid index. No mutexes in the hot path.
+// Writes claim unique key indices up front, but readers only see keys that
+// were actually committed successfully.
 func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 	if env.Threads <= 0 {
 		return errors.New("smallobj " + w.name + ": threads must be >0")
@@ -88,14 +95,13 @@ func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 		go func(id int) {
 			defer wg.Done()
 			local := workload.WorkerRand(env, id)
-			rec := env.Recorder.ShardFor(id)
+			rec := env.ShardRecorder(id)
 			for ctx.Err() == nil {
 				if local.Float64() < w.readRatio {
-					cnt := w.writtenCount.Load()
-					if cnt == 0 {
+					k, ok := w.sampleKey(local)
+					if !ok {
 						continue
 					}
-					k := w.keyFor(local.Int63n(cnt))
 					start := time.Now()
 					rc, err := env.S3.Get(ctx, k)
 					var n int64
@@ -105,12 +111,15 @@ func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 					}
 					rec.Record(w.name, metrics.OpGet, time.Since(start), n, err)
 				} else {
-					idx := w.writtenCount.Add(1) - 1
+					idx := w.nextIndex.Add(1) - 1
 					k := w.keyFor(idx)
 					body := bodygen.NewReader(w.objectSize)
 					start := time.Now()
 					err := env.S3.Put(ctx, k, body, w.objectSize)
 					bodygen.Release(body)
+					if err == nil {
+						w.publishKey(k)
+					}
 					rec.Record(w.name, metrics.OpPut, time.Since(start), w.objectSize, err)
 				}
 			}
@@ -120,12 +129,36 @@ func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 	return nil
 }
 
-// Cleanup deletes every key claimed by the workload. Indices 0..writtenCount-1
-// are always valid, which eliminates the shared list.
+func (w *Workload) loadKeys() []string {
+	w.keysMu.RLock()
+	defer w.keysMu.RUnlock()
+	if len(w.keys) == 0 {
+		return nil
+	}
+	keys := make([]string, len(w.keys))
+	copy(keys, w.keys)
+	return keys
+}
+
+func (w *Workload) sampleKey(r *rand.Rand) (string, bool) {
+	w.keysMu.RLock()
+	defer w.keysMu.RUnlock()
+	if len(w.keys) == 0 {
+		return "", false
+	}
+	return w.keys[r.Intn(len(w.keys))], true
+}
+
+func (w *Workload) publishKey(key string) {
+	w.keysMu.Lock()
+	w.keys = append(w.keys, key)
+	w.keysMu.Unlock()
+}
+
+// Cleanup deletes every key known to have been written successfully.
 func (w *Workload) Cleanup(ctx context.Context, env *workload.Env) error {
-	cnt := w.writtenCount.Load()
-	for i := int64(0); i < cnt; i++ {
-		if err := env.S3.Delete(ctx, w.keyFor(i)); err != nil && !s3client.IsNotFound(err) {
+	for _, key := range w.loadKeys() {
+		if err := env.S3.Delete(ctx, key); err != nil && !s3client.IsNotFound(err) {
 			return err
 		}
 	}

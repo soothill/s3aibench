@@ -25,9 +25,9 @@ const TypeName = "metadata"
 // Register wires the factory.
 func Register() {
 	workload.Register(TypeName, func(w plan.Workload) (workload.Workload, error) {
-		fanout := intParam(w.Params, "prefix_fanout", 4)
-		depth := intParam(w.Params, "prefix_depth", 2)
-		perPrefix := intParam(w.Params, "objects_per_prefix", 25)
+		fanout := workload.IntParam(w.Params, "prefix_fanout", 4)
+		depth := workload.IntParam(w.Params, "prefix_depth", 2)
+		perPrefix := workload.IntParam(w.Params, "objects_per_prefix", 25)
 		objectSize := int64(w.ObjectSize)
 		if objectSize <= 0 {
 			objectSize = 1024 // stub objects
@@ -109,7 +109,7 @@ func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 		go func(id int) {
 			defer wg.Done()
 			local := workload.WorkerRand(env, id)
-			rec := env.Recorder.ShardFor(id)
+			rec := env.ShardRecorder(id)
 			for ctx.Err() == nil {
 				w.oneOp(ctx, env, rec, local, w.baseKeys)
 			}
@@ -201,18 +201,4 @@ func (w *Workload) Cleanup(ctx context.Context, env *workload.Env) error {
 		}
 	}
 	return nil
-}
-
-// -- helpers -----------------------------------------------------------------
-
-func intParam(p map[string]interface{}, key string, def int) int {
-	if v, ok := p[key]; ok {
-		if f, fok := v.(float64); fok {
-			return int(f)
-		}
-		if i, iok := v.(int); iok {
-			return i
-		}
-	}
-	return def
 }

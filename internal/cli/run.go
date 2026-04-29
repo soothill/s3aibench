@@ -104,6 +104,7 @@ func doRun(ctx context.Context, p *plan.Plan, cfg *appcfg.Config, out io.Writer,
 		go tk.Run(tickCtx)
 	}
 
+	var runErr error
 	if _, err = runRunner(ctx, runner.Options{
 		S3:          client,
 		Recorder:    rec,
@@ -118,23 +119,23 @@ func doRun(ctx context.Context, p *plan.Plan, cfg *appcfg.Config, out io.Writer,
 		Seed:        cfg.RandomSeed,
 		Prepopulate: cfg.Prepopulate,
 	}); err != nil {
-		return err
-	}
-
-	rep := report.Build(rec.Snapshot(), cfg)
-	if err := writeReports(rep, cfg, out); err != nil {
-		return err
+		runErr = err
+	} else {
+		rep := report.Build(rec.Snapshot(), cfg)
+		runErr = writeReports(rep, cfg, out)
 	}
 
 	if cfg.Cleanup {
-		for _, w := range wls {
-			if cerr := w.Cleanup(ctx, &workload.Env{S3: client, Recorder: rec}); cerr != nil {
-				return cerr
-			}
+		if cerr := cleanupAfterRun(context.WithoutCancel(ctx), client, cfg.Prefix); cerr != nil {
+			return errors.Join(runErr, cerr)
 		}
-		if _, cerr := safety.Cleanup(ctx, client, cfg.Prefix); cerr != nil {
-			return cerr
-		}
+	}
+	return runErr
+}
+
+func cleanupAfterRun(ctx context.Context, client s3client.Client, prefix string) error {
+	if _, err := safety.Cleanup(ctx, client, prefix); err != nil {
+		return err
 	}
 	return nil
 }

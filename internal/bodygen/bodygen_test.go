@@ -111,6 +111,28 @@ func TestReadWrapsEntropyBlock(t *testing.T) {
 	}
 }
 
+func TestReadHandlesLargeSingleRead(t *testing.T) {
+	size := int64(3*blockSize + 7)
+	r := NewReader(size)
+	defer Release(r)
+	buf := make([]byte, size)
+	n, err := io.ReadFull(r, buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(n) != size {
+		t.Fatalf("read %d want %d", n, size)
+	}
+	for offset := 0; offset < 3*blockSize; offset += blockSize {
+		if !bytes.Equal(buf[offset:offset+blockSize], entropy) {
+			t.Fatalf("block at %d did not repeat entropy", offset)
+		}
+	}
+	if !bytes.Equal(buf[3*blockSize:], entropy[:7]) {
+		t.Fatal("tail did not wrap correctly")
+	}
+}
+
 type zeroReader struct{}
 
 func (zeroReader) Read(p []byte) (int, error) { return 0, io.ErrUnexpectedEOF }

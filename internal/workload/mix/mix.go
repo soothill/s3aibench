@@ -1,13 +1,13 @@
 // Package mix runs several workloads concurrently with configurable weights,
-// implementing PRD §§5.7–5.8 (write-intensive and read-intensive mixes). Each
-// nested workload keeps its own thread pool, weighted so that
-// sum(threads * weight) == env.Threads.
+// implementing PRD §§5.7–5.8 (write-intensive and read-intensive mixes). Child
+// thread pools are apportioned by weight without exceeding env.Threads.
 package mix
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -67,19 +67,11 @@ func parseNested(m map[string]interface{}) (nested, error) {
 		return n, errors.New("nested workload requires name and type")
 	}
 	n.plan = plan.Workload{Name: name, Type: typeName}
-	if w, ok := m["weight"].(float64); ok {
-		n.weight = int(w)
-	} else if w, ok := m["weight"].(int); ok {
-		n.weight = w
-	}
+	n.weight = workload.IntParam(m, "weight", 1)
 	if n.weight <= 0 {
 		n.weight = 1
 	}
-	if sz, ok := m["object_size"].(float64); ok {
-		n.plan.ObjectSize = plan.Size(int64(sz))
-	} else if sz, ok := m["object_size"].(int); ok {
-		n.plan.ObjectSize = plan.Size(int64(sz))
-	}
+	n.plan.ObjectSize = plan.Size(workload.SizeParam(m, "object_size", 0))
 	if params, ok := m["params"].(map[string]interface{}); ok {
 		n.plan.Params = params
 	}
@@ -108,9 +100,13 @@ func (w *Workload) Prepopulate(ctx context.Context, env *workload.Env) error {
 }
 
 // Run launches each child concurrently with a per-child env whose Threads are
-// allocated proportionally to the child's weight. Children share the parent's
-// Recorder so per-workload metrics land in the same snapshot.
+// apportioned proportionally to the child's weight without oversubscribing the
+// parent thread budget. Children share the parent's Recorder so per-workload
+// metrics land in the same snapshot.
 func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
+	if env.Threads <= 0 {
+		return fmt.Errorf("mix %q: threads must be >0", w.name)
+	}
 	total := 0
 	for _, wt := range w.weights {
 		total += wt
@@ -119,13 +115,14 @@ func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 		return fmt.Errorf("mix %q: total weight must be >0", w.name)
 	}
 	var wg sync.WaitGroup
-	wg.Add(len(w.children))
 	errCh := make(chan error, len(w.children))
+	alloc := allocateThreads(env.Threads, w.weights)
 	for i, c := range w.children {
-		threads := env.Threads * w.weights[i] / total
-		if threads < 1 {
-			threads = 1
+		threads := alloc[i]
+		if threads == 0 {
+			continue
 		}
+		wg.Add(1)
 		childEnv := *env
 		childEnv.Threads = threads
 		go func(child workload.Workload, cenv workload.Env) {
@@ -145,6 +142,39 @@ func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 		return fmt.Errorf("mix %q child errors: %s", w.name, strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+func allocateThreads(totalThreads int, weights []int) []int {
+	if totalThreads <= 0 || len(weights) == 0 {
+		return make([]int, len(weights))
+	}
+	totalWeight := 0
+	for _, w := range weights {
+		totalWeight += w
+	}
+	if totalWeight <= 0 {
+		return make([]int, len(weights))
+	}
+	type remainder struct {
+		idx int
+		rem int
+	}
+	alloc := make([]int, len(weights))
+	remainders := make([]remainder, 0, len(weights))
+	assigned := 0
+	for i, w := range weights {
+		product := totalThreads * w
+		alloc[i] = product / totalWeight
+		assigned += alloc[i]
+		remainders = append(remainders, remainder{idx: i, rem: product % totalWeight})
+	}
+	sort.SliceStable(remainders, func(i, j int) bool {
+		return remainders[i].rem > remainders[j].rem
+	})
+	for i := 0; i < totalThreads-assigned && i < len(remainders); i++ {
+		alloc[remainders[i].idx]++
+	}
+	return alloc
 }
 
 // Cleanup calls each child in reverse registration order.

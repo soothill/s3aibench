@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/darrensoothill/s3aibench/internal/metrics"
@@ -55,17 +56,19 @@ func Run(ctx context.Context, opt Options) (*Result, error) {
 	}
 
 	res := &Result{}
+	var nextShardID atomic.Int64
 	mkEnv := func(i int) *workload.Env {
 		return &workload.Env{
-			S3:          opt.S3,
-			Recorder:    opt.Recorder,
-			Logger:      opt.Logger,
-			Rand:        rand.New(rand.NewSource(workload.WorkerSeed(opt.Seed, i))),
-			Seed:        opt.Seed,
-			Threads:     opt.Threads,
-			RunPrefix:   opt.RunPrefix,
-			PartSize:    opt.PartSize,
-			Concurrency: opt.Concurrency,
+			S3:           opt.S3,
+			Recorder:     opt.Recorder,
+			Logger:       opt.Logger,
+			Rand:         rand.New(rand.NewSource(workload.WorkerSeed(opt.Seed, i))),
+			Seed:         opt.Seed,
+			Threads:      opt.Threads,
+			RunPrefix:    opt.RunPrefix,
+			PartSize:     opt.PartSize,
+			Concurrency:  opt.Concurrency,
+			ShardCounter: &nextShardID,
 		}
 	}
 
@@ -110,7 +113,7 @@ func runConcurrent(ctx context.Context, wls []workload.Workload,
 // metricsDiscard is a Recorder that drops every call — used during warmup.
 type metricsDiscard struct{}
 
-func (d metricsDiscard) Record(string, metrics.Op, time.Duration, int64, error) {}
+func (d metricsDiscard) Record(string, metrics.Op, time.Duration, int64, error) { _ = d }
 func (d metricsDiscard) Snapshot() metrics.Snapshot                             { return metrics.Snapshot{} }
 func (d metricsDiscard) Totals() metrics.Totals                                 { return metrics.Totals{} }
 func (d metricsDiscard) ShardFor(int) metrics.Recorder                          { return d }

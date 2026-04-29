@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,16 +28,16 @@ const TypeName = "lancedb"
 // Register wires the factory.
 func Register() {
 	workload.Register(TypeName, func(w plan.Workload) (workload.Workload, error) {
-		fragments := intParam(w.Params, "fragments", 100)
-		fragSize := sizeParam(w.Params, "fragment_size", 128*1024*1024)
-		manifests := intParam(w.Params, "manifest_count", 50)
-		manifestMax := sizeParam(w.Params, "manifest_max_size", 64*1024)
-		manifestMin := sizeParam(w.Params, "manifest_min_size", 1024)
-		ratio := floatParam(w.Params, "read_ratio", 0.8)
-		rangeMean := sizeParam(w.Params, "range_mean", 64*1024)
-		rangeSigma := floatParam(w.Params, "range_sigma", 1.5)
-		rangeMin := sizeParam(w.Params, "range_min", 4*1024)
-		rangeMax := sizeParam(w.Params, "range_max", 4*1024*1024)
+		fragments := workload.IntParam(w.Params, "fragments", 100)
+		fragSize := workload.SizeParam(w.Params, "fragment_size", 128*1024*1024)
+		manifests := workload.IntParam(w.Params, "manifest_count", 50)
+		manifestMax := workload.SizeParam(w.Params, "manifest_max_size", 64*1024)
+		manifestMin := workload.SizeParam(w.Params, "manifest_min_size", 1024)
+		ratio := workload.FloatParam(w.Params, "read_ratio", 0.8)
+		rangeMean := workload.SizeParam(w.Params, "range_mean", 64*1024)
+		rangeSigma := workload.FloatParam(w.Params, "range_sigma", 1.5)
+		rangeMin := workload.SizeParam(w.Params, "range_min", 4*1024)
+		rangeMax := workload.SizeParam(w.Params, "range_max", 4*1024*1024)
 		if fragments <= 0 || manifests <= 0 {
 			return nil, fmt.Errorf("lancedb %q: fragments and manifest_count must be >0", w.Name)
 		}
@@ -140,7 +139,7 @@ func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 		go func(id int) {
 			defer wg.Done()
 			local := workload.WorkerRand(env, id)
-			rec := env.Recorder.ShardFor(id)
+			rec := env.ShardRecorder(id)
 			// Per-worker sampler — lock-free Sample() on the hot path.
 			rangeSampler := template.ForWorker(id)
 			for ctx.Err() == nil {
@@ -236,47 +235,4 @@ func (w *Workload) Cleanup(ctx context.Context, env *workload.Env) error {
 		}
 	}
 	return nil
-}
-
-// -- helpers -----------------------------------------------------------------
-
-func intParam(p map[string]interface{}, key string, def int) int {
-	if v, ok := p[key]; ok {
-		if f, fok := v.(float64); fok {
-			return int(f)
-		}
-		if i, iok := v.(int); iok {
-			return i
-		}
-	}
-	return def
-}
-
-func floatParam(p map[string]interface{}, key string, def float64) float64 {
-	if v, ok := p[key]; ok {
-		if f, fok := v.(float64); fok {
-			return f
-		}
-		if i, iok := v.(int); iok {
-			return float64(i)
-		}
-		if s, sok := v.(string); sok {
-			if parsed, err := strconv.ParseFloat(s, 64); err == nil {
-				return parsed
-			}
-		}
-	}
-	return def
-}
-
-func sizeParam(p map[string]interface{}, key string, def int64) int64 {
-	if v, ok := p[key]; ok {
-		if f, fok := v.(float64); fok {
-			return int64(f)
-		}
-		if i, iok := v.(int); iok {
-			return int64(i)
-		}
-	}
-	return def
 }

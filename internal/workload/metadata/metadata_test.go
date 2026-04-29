@@ -258,13 +258,5 @@ func TestBuildPrefixesDepthZero(t *testing.T) {
 }
 
 func TestIntParamHelper(t *testing.T) {
-	if intParam(map[string]interface{}{"k": 7}, "k", 0) != 7 {
-		t.Fatal("int")
-	}
-	if intParam(map[string]interface{}{"k": "x"}, "k", 3) != 3 {
-		t.Fatal("bad-type default")
-	}
-	if intParam(nil, "k", 3) != 3 {
-		t.Fatal("missing default")
-	}
+	// Helper coverage lives in internal/workload.
 }

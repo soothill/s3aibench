@@ -127,6 +127,26 @@ Under `plans/`:
 [`pkg/reportschema`](./pkg/reportschema). The JSON schema is stable at
 `schema_version: "1.0.0"`.
 
+## Repeatability runs
+
+To rerun every plan under `plans/` multiple times and summarize run-to-run
+variability:
+
+```
+scripts/repeatability.py --build --runs 3
+```
+
+The script writes raw JSON/text/log artifacts under `reports/repeatability-*`
+and prints a Markdown summary with per-plan success counts plus per
+plan/workload/operation statistics: mean, standard deviation, coefficient of
+variation, min, max, and a repeatability band. Pass a subset with repeated
+`--plan` flags, and pass normal `s3aibench run` overrides after `--`, for
+example:
+
+```
+scripts/repeatability.py --runs 5 --plan plans/reference-small-object.yaml -- --duration 30s --warmup 5s
+```
+
 ## Testing and quality
 
 - **100 % line coverage** is enforced by CI via
