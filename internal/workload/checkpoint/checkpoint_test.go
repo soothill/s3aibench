@@ -68,6 +68,17 @@ func TestFactoryParams(t *testing.T) {
 	}
 }
 
+func TestFactoryRejectsNegativeRetain(t *testing.T) {
+	workload.Reset()
+	Register()
+	if _, err := workload.Build(plan.Workload{
+		Name: "w", Type: TypeName, ObjectSize: 1024,
+		Params: map[string]interface{}{"retain_versions": -1},
+	}); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestResumeIsPaced(t *testing.T) {
 	env, _, coll := makeEnv(t, 1)
 	w := build(t, plan.Workload{

@@ -6,9 +6,9 @@
 // objects larger than 1 MiB. Reader structs are pooled via sync.Pool, so the
 // only per-request cost is an atomic pool Get/Put and a few field writes.
 //
-// Reader implements io.ReadSeeker, which lets manager.Uploader stream
-// multipart parts directly from the block instead of buffering each part in
-// its own heap allocation.
+// Reader implements io.ReaderAt and io.ReadSeeker, which lets manager.Uploader
+// stream multipart parts from independent section readers instead of sharing
+// the stateful Read offset across multipart worker goroutines.
 package bodygen
 
 import (
@@ -82,21 +82,42 @@ func (r *Reader) Read(p []byte) (int, error) {
 	if n > remain {
 		n = remain
 	}
-	// Cycle through the entropy block until the destination buffer is filled.
-	written := int64(0)
-	for written < n {
-		startInBlock := (r.offset + written) % blockSize
-		chunk := n - written
-		if avail := int64(blockSize) - startInBlock; chunk > avail {
-			chunk = avail
-		}
-		dstStart := int(written)
-		dstEnd := int(written + chunk)
-		copy(p[dstStart:dstEnd], entropy[startInBlock:startInBlock+chunk])
-		written += chunk
-	}
+	fill(p[:int(n)], r.offset)
 	r.offset += n
 	return int(n), nil
+}
+
+// ReadAt implements io.ReaderAt without mutating the Reader's current offset.
+func (r *Reader) ReadAt(p []byte, off int64) (int, error) {
+	if off < 0 {
+		return 0, errors.New("bodygen: negative ReadAt offset")
+	}
+	if off >= r.size {
+		return 0, io.EOF
+	}
+	n := int64(len(p))
+	if remain := r.size - off; n > remain {
+		n = remain
+	}
+	fill(p[:int(n)], off)
+	if n < int64(len(p)) {
+		return int(n), io.EOF
+	}
+	return int(n), nil
+}
+
+// fill copies deterministic data from entropy into dst, cycling as needed.
+func fill(dst []byte, offset int64) {
+	written := 0
+	for written < len(dst) {
+		start := int((offset + int64(written)) % int64(len(entropy)))
+		chunk := len(dst) - written
+		if avail := len(entropy) - start; chunk > avail {
+			chunk = avail
+		}
+		copy(dst[written:written+chunk], entropy[start:start+chunk])
+		written += chunk
+	}
 }
 
 // Seek implements io.Seeker, enabling manager.Uploader's streaming path.

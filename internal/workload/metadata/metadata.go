@@ -28,6 +28,8 @@ func Register() {
 		fanout := workload.IntParam(w.Params, "prefix_fanout", 4)
 		depth := workload.IntParam(w.Params, "prefix_depth", 2)
 		perPrefix := workload.IntParam(w.Params, "objects_per_prefix", 25)
+		paginationDepth := workload.IntParam(w.Params, "pagination_depth", 0)
+		listMaxKeys := workload.IntParam(w.Params, "list_max_keys", 100)
 		objectSize := int64(w.ObjectSize)
 		if objectSize <= 0 {
 			objectSize = 1024 // stub objects
@@ -35,10 +37,14 @@ func Register() {
 		if fanout <= 0 || depth <= 0 || perPrefix <= 0 {
 			return nil, fmt.Errorf("metadata %q: fanout/depth/objects_per_prefix must be >0", w.Name)
 		}
+		if paginationDepth < 0 || listMaxKeys <= 0 {
+			return nil, fmt.Errorf("metadata %q: pagination_depth must be >=0 and list_max_keys must be >0", w.Name)
+		}
 		return &Workload{
 			name: w.Name, copyPrefix: w.Name + "/copy/dst-",
 			fanout: fanout, depth: depth,
 			perPrefix: perPrefix, objectSize: objectSize,
+			paginationDepth: paginationDepth, listMaxKeys: int32(listMaxKeys),
 		}, nil
 	})
 }
@@ -47,12 +53,14 @@ func Register() {
 // base key set is fixed at Prepopulate time, and COPY destinations are
 // derived from an atomic counter.
 type Workload struct {
-	name       string
-	copyPrefix string
-	fanout     int
-	depth      int
-	perPrefix  int
-	objectSize int64
+	name            string
+	copyPrefix      string
+	fanout          int
+	depth           int
+	perPrefix       int
+	objectSize      int64
+	paginationDepth int
+	listMaxKeys     int32
 
 	baseKeys  []string     // finalised in Prepopulate, read-only after
 	copyCount atomic.Int64 // number of COPY destinations claimed
@@ -147,15 +155,24 @@ func (w *Workload) head(ctx context.Context, env *workload.Env, rec metrics.Reco
 // continuation tokens so LIST rate counts objects, not just requests.
 func (w *Workload) listPrefix(ctx context.Context, env *workload.Env, rec metrics.Recorder, delim string) {
 	token := ""
+	pages := 0
+	maxKeys := w.listMaxKeys
+	if maxKeys <= 0 {
+		maxKeys = 100
+	}
 	for {
 		start := time.Now()
-		res, err := env.S3.List(ctx, w.name+"/", delim, token, 100)
+		res, err := env.S3.List(ctx, w.name+"/", delim, token, maxKeys)
 		var n int64
 		if err == nil {
 			n = int64(len(res.Keys) + len(res.CommonPrefixes))
 		}
 		rec.Record(w.name, metrics.OpList, time.Since(start), n, err)
 		if err != nil || res == nil || !res.IsTruncated {
+			return
+		}
+		pages++
+		if w.paginationDepth > 0 && pages >= w.paginationDepth {
 			return
 		}
 		token = res.NextContinuation

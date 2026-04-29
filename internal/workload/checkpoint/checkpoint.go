@@ -32,6 +32,9 @@ func Register() {
 		retain := workload.IntParam(w.Params, "retain_versions", 3)
 		burst := workload.DurationParam(w.Params, "burst_interval", 60*time.Second)
 		resume := workload.BoolParam(w.Params, "resume", false)
+		if retain < 0 {
+			return nil, fmt.Errorf("checkpoint %q: retain_versions must be >=0", w.Name)
+		}
 		return &Workload{
 			name: w.Name, keyPrefix: w.Name + "/ckpt-", objectSize: int64(w.ObjectSize),
 			writers: writers, retain: retain, burstInterval: burst, resume: resume,

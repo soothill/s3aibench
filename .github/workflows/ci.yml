@@ -13,8 +13,8 @@ jobs:
       minio:
         image: quay.io/minio/minio:latest
         env:
-          MINIO_ROOT_USER: minio
-          MINIO_ROOT_PASSWORD: miniominio
+          MINIO_ROOT_USER: ci-${{ github.run_id }}
+          MINIO_ROOT_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
         ports:
           - 9000:9000
         options: >-
@@ -41,8 +41,8 @@ jobs:
           done
       - name: MinIO smoke test
         env:
-          AWS_ACCESS_KEY_ID: minio
-          AWS_SECRET_ACCESS_KEY: miniominio
+          AWS_ACCESS_KEY_ID: ci-${{ github.run_id }}
+          AWS_SECRET_ACCESS_KEY: ci-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           # Set up a test bucket via mc, then run a tiny end-to-end bench.
           curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
@@ -55,8 +55,6 @@ jobs:
           region: us-east-1
           path_style: true
           bucket: ci-smoke
-          access_key: minio
-          secret_key: miniominio
           defaults:
             duration: 5s
             threads: 4

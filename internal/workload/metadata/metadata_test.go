@@ -39,6 +39,8 @@ func TestFactoryValidation(t *testing.T) {
 		{"prefix_fanout": 0},
 		{"prefix_depth": 0},
 		{"objects_per_prefix": 0},
+		{"pagination_depth": -1},
+		{"list_max_keys": 0},
 	}
 	for _, c := range cases {
 		if _, err := workload.Build(plan.Workload{Name: "w", Type: TypeName, Params: c}); err == nil {
@@ -144,6 +146,23 @@ func TestListPagination(t *testing.T) {
 	st := coll.Snapshot().Workloads["w"][metrics.OpList]
 	if st == nil || st.Count < 2 {
 		t.Fatalf("expected multiple LIST requests, got %v", st)
+	}
+}
+
+func TestListPaginationDepthLimit(t *testing.T) {
+	env, _, coll := makeEnv(t, 1)
+	w := &Workload{name: "w", objectSize: 1, paginationDepth: 1, listMaxKeys: 10}
+	body := []byte("x")
+	ctx := context.Background()
+	for i := 0; i < 30; i++ {
+		k := "w/obj-" + string(rune('A'+i))
+		_ = env.S3.Put(ctx, k, bytesNewReader(body), int64(len(body)))
+		w.baseKeys = append(w.baseKeys, k)
+	}
+	w.listPrefix(ctx, env, env.Recorder, "")
+	st := coll.Snapshot().Workloads["w"][metrics.OpList]
+	if st == nil || st.Count != 1 {
+		t.Fatalf("expected one LIST request, got %v", st)
 	}
 }
 

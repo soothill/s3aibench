@@ -56,6 +56,7 @@ Each entry reports one named workload. `operations` is keyed by op name
 | `bytes`          | int     | Cumulative bytes transferred |
 | `throughput_bps` | float   | Bytes/sec over the measurement window |
 | `latency_ns`     | object  | See below |
+| `timeline`       | array   | Optional per-second buckets when `output.timeline` is true |
 
 ### `latency_ns`
 
@@ -80,6 +81,17 @@ Top-level aggregated errors across all workloads.
 | `code`           | string | SDK error code (`SlowDown`, `NoSuchKey`, `unknown`, …) |
 | `count`          | int    | Occurrences |
 | `sample_message` | string | First-seen error message |
+
+## `timeline[]`
+
+Optional per-operation buckets emitted only when timeline output is enabled.
+
+| Field    | Type | Description |
+|----------|------|-------------|
+| `second` | int  | Whole seconds since measurement start |
+| `ops`    | int  | Operations recorded in the bucket |
+| `bytes`  | int  | Bytes recorded in the bucket |
+| `errors` | int  | Errors recorded in the bucket |
 
 ## Stability
 

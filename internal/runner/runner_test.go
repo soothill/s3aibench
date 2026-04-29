@@ -16,6 +16,7 @@ import (
 type spyWL struct {
 	name                      string
 	runCalls                  atomic.Int32
+	capturedThreads           atomic.Int32
 	prepopCalls, cleanupCalls atomic.Int32
 	prepopErr, runErr         error
 	blockUntilCancel          bool
@@ -27,8 +28,9 @@ func (s *spyWL) Prepopulate(_ context.Context, _ *workload.Env) error {
 	s.prepopCalls.Add(1)
 	return s.prepopErr
 }
-func (s *spyWL) Run(ctx context.Context, _ *workload.Env) error {
+func (s *spyWL) Run(ctx context.Context, env *workload.Env) error {
 	s.runCalls.Add(1)
+	s.capturedThreads.Store(int32(env.Threads))
 	if s.blockUntilCancel {
 		<-ctx.Done()
 	}
@@ -106,6 +108,39 @@ func TestRunLogsRunError(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunUsesResolvedSpecs(t *testing.T) {
+	w := &spyWL{name: "w", blockUntilCancel: true}
+	rec := metrics.NewCollector()
+	_, err := Run(context.Background(), Options{
+		Recorder: rec,
+		Specs: []WorkloadSpec{{
+			Workload: w,
+			Threads:  3,
+			Duration: 5 * time.Millisecond,
+		}},
+		Duration: 30 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.capturedThreads.Load() != 3 {
+		t.Fatalf("threads=%d", w.capturedThreads.Load())
+	}
+}
+
+func TestRunRejectsBadSpecs(t *testing.T) {
+	w := &spyWL{name: "w"}
+	for _, specs := range [][]WorkloadSpec{
+		{{Threads: 1, Duration: time.Millisecond}},
+		{{Workload: w, Duration: time.Millisecond}},
+		{{Workload: w, Threads: 1}},
+	} {
+		if _, err := Run(context.Background(), Options{Recorder: metrics.NewCollector(), Specs: specs, Duration: time.Millisecond}); err == nil {
+			t.Fatalf("expected error for specs=%+v", specs)
+		}
 	}
 }
 

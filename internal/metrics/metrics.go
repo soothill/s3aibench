@@ -69,8 +69,17 @@ type OpStats struct {
 	LatMax    time.Duration
 	LatMin    time.Duration
 	ErrByCode map[string]*ErrAgg
+	Timeline  map[int64]TimelineBucket
 
 	hist *hdr.Histogram // unexported: consumed via Percentile/StdDev/Histogram
+}
+
+// TimelineBucket aggregates one second of activity for optional reports.
+type TimelineBucket struct {
+	Second int64
+	Ops    int64
+	Bytes  int64
+	Errors int64
 }
 
 // ErrAgg aggregates errors by code.
@@ -84,10 +93,11 @@ type ErrAgg struct {
 type shard struct {
 	mu        sync.Mutex
 	workloads map[string]map[Op]*OpStats
+	start     time.Time
 }
 
-func newShard() *shard {
-	return &shard{workloads: map[string]map[Op]*OpStats{}}
+func newShard(start time.Time) *shard {
+	return &shard{workloads: map[string]map[Op]*OpStats{}, start: start}
 }
 
 func (s *shard) record(workload string, op Op, latency time.Duration, bytes int64, err error) {
@@ -103,6 +113,7 @@ func (s *shard) record(workload string, op Op, latency time.Duration, bytes int6
 		st = &OpStats{
 			LatMin:    time.Duration(hdrMax),
 			ErrByCode: map[string]*ErrAgg{},
+			Timeline:  map[int64]TimelineBucket{},
 			hist:      newHDR(),
 		}
 		wl[op] = st
@@ -134,6 +145,18 @@ func (s *shard) record(workload string, op Op, latency time.Duration, bytes int6
 		}
 		agg.Count++
 	}
+	sec := int64(0)
+	if !s.start.IsZero() {
+		sec = int64(time.Since(s.start) / time.Second)
+	}
+	b := st.Timeline[sec]
+	b.Second = sec
+	b.Ops++
+	b.Bytes += bytes
+	if err != nil {
+		b.Errors++
+	}
+	st.Timeline[sec] = b
 }
 
 // Collector is the default Recorder implementation. Record() goes through a
@@ -148,10 +171,11 @@ type Collector struct {
 
 // NewCollector returns a thread-safe Recorder backed by HDR histograms.
 func NewCollector() *Collector {
+	start := time.Now()
 	return &Collector{
 		shards:   map[int]*shard{},
-		fallback: newShard(),
-		start:    time.Now(),
+		fallback: newShard(start),
+		start:    start,
 	}
 }
 
@@ -168,7 +192,7 @@ func (c *Collector) ShardFor(workerID int) Recorder {
 	c.mu.Lock()
 	s, ok := c.shards[workerID]
 	if !ok {
-		s = newShard()
+		s = newShard(c.start)
 		c.shards[workerID] = s
 	}
 	c.mu.Unlock()
@@ -217,6 +241,7 @@ func (c *Collector) Snapshot() Snapshot {
 					merged = &OpStats{
 						LatMin:    time.Duration(hdrMax),
 						ErrByCode: map[string]*ErrAgg{},
+						Timeline:  map[int64]TimelineBucket{},
 						hist:      newHDR(),
 					}
 					dst[op] = merged
@@ -275,6 +300,17 @@ func mergeStats(dst, src *OpStats) {
 	}
 	if src.hist != nil {
 		dst.hist.Merge(src.hist)
+	}
+	if dst.Timeline == nil {
+		dst.Timeline = map[int64]TimelineBucket{}
+	}
+	for sec, bucket := range src.Timeline {
+		merged := dst.Timeline[sec]
+		merged.Second = sec
+		merged.Ops += bucket.Ops
+		merged.Bytes += bucket.Bytes
+		merged.Errors += bucket.Errors
+		dst.Timeline[sec] = merged
 	}
 	for code, agg := range src.ErrByCode {
 		m := dst.ErrByCode[code]

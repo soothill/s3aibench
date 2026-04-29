@@ -104,6 +104,9 @@ func (a *AWS) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 }
 
 func (a *AWS) RangeGet(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error) {
+	if offset < 0 || length <= 0 {
+		return nil, fmt.Errorf("s3client: invalid range offset=%d length=%d", offset, length)
+	}
 	rng := fmt.Sprintf("bytes=%d-%d", offset, offset+length-1)
 	out, err := a.api.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(a.bucket), Key: aws.String(a.key(key)), Range: aws.String(rng),

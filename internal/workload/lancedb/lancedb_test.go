@@ -35,11 +35,20 @@ func build(t *testing.T, p plan.Workload) workload.Workload {
 func TestFactoryValidation(t *testing.T) {
 	workload.Reset()
 	Register()
-	if _, err := workload.Build(plan.Workload{
-		Name: "w", Type: TypeName,
-		Params: map[string]interface{}{"fragments": 0},
-	}); err == nil {
-		t.Fatal("expected error for fragments<=0")
+	for _, tc := range []map[string]interface{}{
+		{"fragments": 0},
+		{"fragment_size": 0},
+		{"manifest_min_size": 0},
+		{"manifest_min_size": 128, "manifest_max_size": 64},
+		{"range_min": 0},
+		{"range_min": 256, "range_max": 64},
+	} {
+		if _, err := workload.Build(plan.Workload{
+			Name: "w", Type: TypeName,
+			Params: tc,
+		}); err == nil {
+			t.Fatalf("expected error for params=%v", tc)
+		}
 	}
 }
 

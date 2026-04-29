@@ -222,6 +222,27 @@ func TestAWSRangeGetError(t *testing.T) {
 	}
 }
 
+func TestAWSRangeGetInvalidRange(t *testing.T) {
+	h := &handler{t: t}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	for _, tc := range []struct {
+		offset int64
+		length int64
+	}{
+		{offset: -1, length: 1},
+		{offset: 0, length: 0},
+		{offset: 0, length: -1},
+	} {
+		if _, err := a.RangeGet(context.Background(), "k", tc.offset, tc.length); err == nil {
+			t.Fatalf("expected error for offset=%d length=%d", tc.offset, tc.length)
+		}
+	}
+	if len(h.seenReq) != 0 {
+		t.Fatalf("invalid range should not issue HTTP request, saw %v", h.seenReq)
+	}
+}
+
 func TestAWSHead(t *testing.T) {
 	h := &handler{t: t, headLen: "42"}
 	a, srv := newAWSTestClient(t, h)

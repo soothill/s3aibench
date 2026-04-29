@@ -56,6 +56,9 @@ func TestRecordAndSnapshot(t *testing.T) {
 	if put.ErrByCode["SlowDown"].Count != 1 {
 		t.Fatalf("missing SlowDown")
 	}
+	if put.Timeline[0].Ops != 3 || put.Timeline[0].Bytes != 1024+2048+4096 || put.Timeline[0].Errors != 1 {
+		t.Fatalf("bad timeline: %+v", put.Timeline)
+	}
 	if s.Workloads["w"][OpGet].ErrByCode["unknown"].Count != 1 {
 		t.Fatalf("missing unknown")
 	}
@@ -161,6 +164,18 @@ func TestMergeErrorAggregation(t *testing.T) {
 	st := snap.Workloads["w"][OpPut]
 	if st.ErrByCode["unknown"].Count != 2 {
 		t.Fatalf("error merge failed: %+v", st.ErrByCode)
+	}
+}
+
+func TestMergeStatsInitializesNilTimeline(t *testing.T) {
+	dst := &OpStats{ErrByCode: map[string]*ErrAgg{}, hist: newHDR()}
+	src := &OpStats{
+		ErrByCode: map[string]*ErrAgg{},
+		Timeline:  map[int64]TimelineBucket{1: {Second: 1, Ops: 1}},
+	}
+	mergeStats(dst, src)
+	if dst.Timeline[1].Ops != 1 {
+		t.Fatalf("timeline not merged: %+v", dst.Timeline)
 	}
 }
 

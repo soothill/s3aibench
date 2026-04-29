@@ -41,6 +41,15 @@ func Register() {
 		if fragments <= 0 || manifests <= 0 {
 			return nil, fmt.Errorf("lancedb %q: fragments and manifest_count must be >0", w.Name)
 		}
+		if fragSize <= 0 {
+			return nil, fmt.Errorf("lancedb %q: fragment_size must be >0", w.Name)
+		}
+		if manifestMin <= 0 || manifestMax < manifestMin {
+			return nil, fmt.Errorf("lancedb %q: manifest_min_size must be >0 and manifest_max_size must be >= manifest_min_size", w.Name)
+		}
+		if rangeMin <= 0 || rangeMax < rangeMin {
+			return nil, fmt.Errorf("lancedb %q: range_min must be >0 and range_max must be >= range_min", w.Name)
+		}
 		return &Workload{
 			name:           w.Name,
 			dataKeyPrefix:  w.Name + "/data/frag-",

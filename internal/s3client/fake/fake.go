@@ -122,14 +122,17 @@ func (c *Client) RangeGet(ctx context.Context, key string, offset, length int64)
 	if !ok {
 		return nil, ErrNotFound
 	}
+	if offset < 0 || length <= 0 {
+		return nil, fmt.Errorf("fake: invalid range offset=%d length=%d", offset, length)
+	}
 	end := offset + length
-	if end > int64(len(b)) {
+	if end < offset || end > int64(len(b)) {
 		end = int64(len(b))
 	}
-	if offset > int64(len(b)) {
+	if offset >= int64(len(b)) {
 		return io.NopCloser(bytes.NewReader(nil)), nil
 	}
-	return io.NopCloser(bytes.NewReader(b[offset:end])), nil
+	return io.NopCloser(bytes.NewReader(b[int(offset):int(end)])), nil
 }
 
 func (c *Client) Head(ctx context.Context, key string) (int64, error) {
