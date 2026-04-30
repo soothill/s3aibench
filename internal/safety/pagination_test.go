@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync/atomic"
 
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/darrensoothill/s3aibench/internal/s3client"
@@ -101,7 +102,7 @@ var _ s3client.VersionedCleaner = (*versionCleaner)(nil)
 type batchTruncClient struct {
 	*fake.Client
 	listCalls   int
-	deleteCalls int
+	deleteCalls atomic.Int64
 }
 
 func (b *batchTruncClient) List(ctx context.Context, prefix, delim, token string, maxKeys int32) (*s3client.ListResult, error) {
@@ -115,7 +116,7 @@ func (b *batchTruncClient) List(ctx context.Context, prefix, delim, token string
 }
 
 func (b *batchTruncClient) DeleteMany(ctx context.Context, keys []string) (int, error) {
-	b.deleteCalls++
+	b.deleteCalls.Add(1)
 	return len(keys), nil
 }
 

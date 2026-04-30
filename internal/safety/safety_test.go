@@ -153,8 +153,8 @@ func TestCleanupBatchedTruncatedPagination(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("deleted %d", n)
 	}
-	if wc.listCalls != 2 || wc.deleteCalls != 2 {
-		t.Fatalf("list calls=%d delete calls=%d", wc.listCalls, wc.deleteCalls)
+	if wc.listCalls != 2 || wc.deleteCalls.Load() != 2 {
+		t.Fatalf("list calls=%d delete calls=%d", wc.listCalls, wc.deleteCalls.Load())
 	}
 }
 
