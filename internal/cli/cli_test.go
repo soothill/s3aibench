@@ -12,9 +12,11 @@ import (
 	"testing"
 
 	appcfg "github.com/darrensoothill/s3aibench/internal/config"
+	"github.com/darrensoothill/s3aibench/internal/plan"
 	"github.com/darrensoothill/s3aibench/internal/runner"
 	"github.com/darrensoothill/s3aibench/internal/s3client"
 	"github.com/darrensoothill/s3aibench/internal/s3client/fake"
+	"github.com/darrensoothill/s3aibench/internal/workload"
 	"github.com/darrensoothill/s3aibench/pkg/reportschema"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -196,6 +198,18 @@ func TestRunUnknownWorkload(t *testing.T) {
 	}
 }
 
+func TestRunWorkloadSpecError(t *testing.T) {
+	body := strings.Replace(planSmall, "threads: 1", "threads: 1", 1)
+	body = strings.Replace(body, "object_size: 4KiB", "object_size: 4KiB\n    threads: 2", 1)
+	c := fake.New()
+	orig := defaultClientFactory
+	defer func() { defaultClientFactory = orig }()
+	defaultClientFactory = makeFakeFactory(c)
+	if _, err := runCobra(t, newRunCmd(context.Background()), "--plan", writePlan(t, body)); err == nil {
+		t.Fatal("expected workload spec error")
+	}
+}
+
 func TestRunBadPlanLoad(t *testing.T) {
 	if _, err := runCobra(t, newRunCmd(context.Background()), "--plan", "/nope"); err == nil {
 		t.Fatal("expected error")
@@ -327,6 +341,8 @@ func TestFlagsIntoOverrides_Setters(t *testing.T) {
 		"--output-text", "t.txt",
 		"--output-json", "t.json",
 		"--progress=true",
+		"--timeline=true",
+		"--progress-interval", "2s",
 		"--path-style=true",
 		"--tls-skip-verify=true",
 		"--http2=true",
@@ -355,20 +371,106 @@ func TestFlagsIntoOverrides_Setters(t *testing.T) {
 	if o.Progress == nil || !*o.Progress {
 		t.Fatal("progress not picked up")
 	}
+	if o.Timeline == nil || !*o.Timeline {
+		t.Fatal("timeline not picked up")
+	}
+	if o.ProgressInterval == nil || *o.ProgressInterval != 2*time.Second {
+		t.Fatalf("progress interval: %+v", o.ProgressInterval)
+	}
 	if o.Warmup == nil || o.Warmup.Milliseconds() != 500 {
 		t.Fatalf("warmup: %+v", o.Warmup)
 	}
 }
 
+func TestBuildWorkloadSpecsWeightedAndExplicit(t *testing.T) {
+	cfg := &appcfg.Config{
+		Threads:  10,
+		Duration: time.Second,
+		Workloads: []plan.Workload{
+			{Name: "a", Type: "smallobject", Threads: 3},
+			{Name: "b", Type: "smallobject", Weight: 1},
+			{Name: "c", Type: "smallobject", Weight: 2, Duration: plan.Duration(2 * time.Second)},
+		},
+	}
+	wls := []workload.Workload{
+		&stubCLIWorkload{name: "a"},
+		&stubCLIWorkload{name: "b"},
+		&stubCLIWorkload{name: "c"},
+	}
+	specs, err := buildWorkloadSpecs(cfg, wls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if specs[0].Threads != 3 || specs[1].Threads != 2 || specs[2].Threads != 5 {
+		t.Fatalf("threads=%d,%d,%d", specs[0].Threads, specs[1].Threads, specs[2].Threads)
+	}
+	if specs[2].Duration != 2*time.Second {
+		t.Fatalf("duration=%v", specs[2].Duration)
+	}
+}
+
+func TestBuildWorkloadSpecsTinyWeightAndOverAssignment(t *testing.T) {
+	cfg := &appcfg.Config{
+		Threads:  5,
+		Duration: time.Second,
+		Workloads: []plan.Workload{
+			{Name: "a", Weight: 1},
+			{Name: "b", Weight: 1},
+			{Name: "c", Weight: 1},
+			{Name: "d", Weight: 100},
+		},
+	}
+	wls := []workload.Workload{
+		&stubCLIWorkload{name: "a"}, &stubCLIWorkload{name: "b"},
+		&stubCLIWorkload{name: "c"}, &stubCLIWorkload{name: "d"},
+	}
+	specs, err := buildWorkloadSpecs(cfg, wls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, spec := range specs {
+		if spec.Threads < 1 {
+			t.Fatalf("zero threads: %+v", specs)
+		}
+		total += spec.Threads
+	}
+	if total != 5 {
+		t.Fatalf("total=%d specs=%+v", total, specs)
+	}
+}
+
+func TestBuildWorkloadSpecsRejectsBudgetErrors(t *testing.T) {
+	w := &stubCLIWorkload{name: "a"}
+	cases := []*appcfg.Config{
+		{Threads: 0, Duration: time.Second, Workloads: []plan.Workload{{Name: "a"}}},
+		{Threads: 1, Duration: time.Second, Workloads: []plan.Workload{{Name: "a", Threads: 2}}},
+		{Threads: 1, Duration: time.Second, Workloads: []plan.Workload{{Name: "a"}, {Name: "b"}}},
+		{Threads: 1, Workloads: []plan.Workload{{Name: "a"}}},
+	}
+	for _, cfg := range cases {
+		wls := []workload.Workload{w}
+		if len(cfg.Workloads) == 2 {
+			wls = append(wls, &stubCLIWorkload{name: "b"})
+		}
+		if _, err := buildWorkloadSpecs(cfg, wls); err == nil {
+			t.Fatalf("expected error for cfg=%+v", cfg)
+		}
+	}
+	if _, err := buildWorkloadSpecs(&appcfg.Config{Threads: 1, Duration: time.Second}, []workload.Workload{w}); err == nil {
+		t.Fatal("expected mismatch error")
+	}
+}
+
 func TestParseLogLevel(t *testing.T) {
 	cases := map[string]slog.Level{
-		"debug": slog.LevelDebug,
-		"info":  slog.LevelInfo,
-		"warn":  slog.LevelWarn,
+		"debug":   slog.LevelDebug,
+		"info":    slog.LevelInfo,
+		"warn":    slog.LevelWarn,
 		"warning": slog.LevelWarn,
-		"error": slog.LevelError,
-		"":      slog.LevelInfo,
-		"bogus": slog.LevelInfo,
+		"error":   slog.LevelError,
+		"":        slog.LevelInfo,
+		"bogus":   slog.LevelInfo,
 	}
 	for in, want := range cases {
 		if got := parseLogLevel(in); got != want {
@@ -389,6 +491,11 @@ func TestNewLoggerAndPrintResolved(t *testing.T) {
 	if !strings.Contains(string(buf[:n]), "config_hash=sha256:abc") {
 		t.Fatalf("got %q", string(buf[:n]))
 	}
+}
+
+func TestLogResolvedConfigNilGuards(t *testing.T) {
+	logResolvedConfig(nil, &appcfg.Config{})
+	logResolvedConfig(slog.Default(), nil)
 }
 
 func TestStderrFile(t *testing.T) {
@@ -414,6 +521,9 @@ func TestLoadAndResolveValidationError(t *testing.T) {
 }
 
 func TestBuildAWSClient(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 	if _, err := buildAWSClient(&appcfg.Config{}); err == nil {
 		t.Fatal("expected error when no credentials")
 	}
@@ -428,6 +538,39 @@ func TestBuildAWSClient(t *testing.T) {
 	}
 	if c == nil {
 		t.Fatal("nil client")
+	}
+}
+
+func TestBuildAWSClientUsesSDKEnvCredentials(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "AK")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "SK")
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	c, err := buildAWSClient(&appcfg.Config{Endpoint: "https://x", Bucket: "b", Region: "us-east-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c == nil {
+		t.Fatal("nil client")
+	}
+}
+
+func TestCredentialProviderRejectsPartialInlineCredentials(t *testing.T) {
+	if _, err := credentialProvider(&appcfg.Config{AccessKey: "AK"}); err == nil {
+		t.Fatal("expected partial inline credential error")
+	}
+}
+
+func TestCredentialProviderLoadConfigError(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config")
+	if err := os.WriteFile(cfg, []byte("[profile broken\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_SDK_LOAD_CONFIG", "1")
+	t.Setenv("AWS_CONFIG_FILE", cfg)
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	if _, err := credentialProvider(&appcfg.Config{}); err == nil {
+		t.Fatal("expected credential chain error")
 	}
 }
 
@@ -558,14 +701,33 @@ func TestLoggerFor(t *testing.T) {
 	}
 }
 
-// deletingFailer returns an unrelated (non-NotFound) error on Delete.
+// deletingFailer returns an unrelated cleanup error on Delete and forces the
+// prefix cleanup walker to see at least one key.
 type deletingFailer struct{ *fake.Client }
+
+func (d *deletingFailer) List(ctx context.Context, prefix, delim, token string, maxKeys int32) (*s3client.ListResult, error) {
+	return &s3client.ListResult{Keys: []string{prefix + "leftover"}}, nil
+}
 
 func (d *deletingFailer) Delete(ctx context.Context, key string) error {
 	return errors.New("delete down hard")
 }
 
 var _ s3client.Client = (*deletingFailer)(nil)
+
+type stubCLIWorkload struct{ name string }
+
+func (s *stubCLIWorkload) Name() string { return s.name }
+func (s *stubCLIWorkload) Type() string { return "stub" }
+func (s *stubCLIWorkload) Prepopulate(context.Context, *workload.Env) error {
+	return nil
+}
+func (s *stubCLIWorkload) Run(context.Context, *workload.Env) error {
+	return nil
+}
+func (s *stubCLIWorkload) Cleanup(context.Context, *workload.Env) error {
+	return nil
+}
 
 // listFailer fails the Nth List call — used to let CheckBucket + safety.Cleanup
 // decide which one breaks.
@@ -666,5 +828,28 @@ func TestRunRunnerError(t *testing.T) {
 	defaultClientFactory = makeFakeFactory(c)
 	if _, err := runCobra(t, newRunCmd(context.Background()), "--plan", writePlan(t, planSmall)); err == nil {
 		t.Fatal("expected runner error")
+	}
+}
+
+func TestRunCleansPrefixAfterRunnerError(t *testing.T) {
+	c := fake.New()
+	orig := runRunner
+	defer func() { runRunner = orig }()
+	runRunner = func(ctx context.Context, opt runner.Options) (*runner.Result, error) {
+		if err := opt.S3.Put(ctx, opt.RunPrefix+"leftover", strings.NewReader("x"), 1); err != nil {
+			t.Fatal(err)
+		}
+		return nil, errors.New("runner boom")
+	}
+	origF := defaultClientFactory
+	defer func() { defaultClientFactory = origF }()
+	defaultClientFactory = makeFakeFactory(c)
+	if _, err := runCobra(t, newRunCmd(context.Background()), "--plan", writePlan(t, planSmall)); err == nil {
+		t.Fatal("expected runner error")
+	}
+	for key := range c.Objects() {
+		if strings.Contains(key, "leftover") {
+			t.Fatalf("leftover key was not cleaned: %q", key)
+		}
 	}
 }

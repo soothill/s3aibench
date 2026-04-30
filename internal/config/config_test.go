@@ -78,14 +78,16 @@ func TestResolvePlanPrecedence(t *testing.T) {
 
 func TestResolveEnvOverrides(t *testing.T) {
 	env := mapEnv(map[string]string{
-		"S3AIBENCH_ENDPOINT":             "https://env-endpoint",
-		"S3AIBENCH_THREADS":              "512",
-		"S3AIBENCH_DURATION":             "5m",
-		"S3AIBENCH_MULTIPART_PART_SIZE":  "8MiB",
-		"S3AIBENCH_PATH_STYLE":           "true",
-		"S3AIBENCH_PROGRESS":             "true",
-		"S3AIBENCH_RANDOM_SEED":          "42",
-		"S3AIBENCH_MAX_RETRIES":          "5",
+		"S3AIBENCH_ENDPOINT":                      "https://env-endpoint",
+		"S3AIBENCH_THREADS":                       "512",
+		"S3AIBENCH_DURATION":                      "5m",
+		"S3AIBENCH_MULTIPART_PART_SIZE":           "8MiB",
+		"S3AIBENCH_PATH_STYLE":                    "true",
+		"S3AIBENCH_PROGRESS":                      "true",
+		"S3AIBENCH_TIMELINE":                      "true",
+		"S3AIBENCH_PROGRESS_INTERVAL":             "2s",
+		"S3AIBENCH_RANDOM_SEED":                   "42",
+		"S3AIBENCH_MAX_RETRIES":                   "5",
 		"S3AIBENCH_WORKLOAD_LANCE_QUERY_THREADS":  "16",
 		"S3AIBENCH_WORKLOAD_LANCE_QUERY_DURATION": "2m",
 		"S3AIBENCH_WORKLOAD_LANCE_QUERY_WEIGHT":   "7",
@@ -106,8 +108,11 @@ func TestResolveEnvOverrides(t *testing.T) {
 	if c.MultipartPartSize != 8*1024*1024 {
 		t.Fatalf("part=%d", c.MultipartPartSize)
 	}
-	if !c.PathStyle || !c.Progress {
+	if !c.PathStyle || !c.Progress || !c.Timeline {
 		t.Fatalf("bools not propagated")
+	}
+	if c.ProgressInterval != 2*time.Second {
+		t.Fatalf("progress interval=%v", c.ProgressInterval)
 	}
 	if c.RandomSeed != 42 {
 		t.Fatalf("seed=%d", c.RandomSeed)
@@ -134,6 +139,8 @@ func TestResolveFlagPrecedence(t *testing.T) {
 	output := "out.txt"
 	outj := "out.json"
 	progress := true
+	timeline := true
+	progressInterval := 3 * time.Second
 	pathStyle := true
 	tlsSkip := true
 	http2 := true
@@ -150,6 +157,7 @@ func TestResolveFlagPrecedence(t *testing.T) {
 		ConnectionPoolSize: &pool, RandomSeed: &seed, Bucket: &bucket,
 		Region: &region, OutputText: &output, OutputJSON: &outj,
 		Progress: &progress, PathStyle: &pathStyle, TLSSkipVerify: &tlsSkip,
+		Timeline: &timeline, ProgressInterval: &progressInterval,
 		HTTP2: &http2, Prepopulate: &prepop, Cleanup: &cleanup,
 		Prefix: &prefix, LogLevel: &level, AllowSharedBucket: &asb,
 		MaxRetries: &retries,
@@ -164,6 +172,7 @@ func TestResolveFlagPrecedence(t *testing.T) {
 		c.MultipartConcurrency != mpc || c.ConnectionPoolSize != pool ||
 		c.RandomSeed != seed || c.Bucket != bucket || c.Region != region ||
 		c.OutputText != output || c.OutputJSON != outj || !c.Progress ||
+		!c.Timeline || c.ProgressInterval != progressInterval ||
 		!c.PathStyle || !c.TLSSkipVerify || !c.HTTP2 || c.Prepopulate ||
 		c.Cleanup || c.Prefix != prefix || c.LogLevel != level ||
 		!c.AllowSharedBucket || c.Warmup != warm || c.MaxRetries != retries {
@@ -173,11 +182,13 @@ func TestResolveFlagPrecedence(t *testing.T) {
 
 func TestResolveEnvParseErrorsFallThrough(t *testing.T) {
 	env := mapEnv(map[string]string{
-		"S3AIBENCH_THREADS":             "not-a-number",
-		"S3AIBENCH_DURATION":            "not-a-duration",
-		"S3AIBENCH_PATH_STYLE":          "not-a-bool",
-		"S3AIBENCH_MULTIPART_PART_SIZE": "not-a-size",
-		"S3AIBENCH_RANDOM_SEED":         "bad",
+		"S3AIBENCH_THREADS":                       "not-a-number",
+		"S3AIBENCH_DURATION":                      "not-a-duration",
+		"S3AIBENCH_PATH_STYLE":                    "not-a-bool",
+		"S3AIBENCH_TIMELINE":                      "not-a-bool",
+		"S3AIBENCH_PROGRESS_INTERVAL":             "not-a-duration",
+		"S3AIBENCH_MULTIPART_PART_SIZE":           "not-a-size",
+		"S3AIBENCH_RANDOM_SEED":                   "bad",
 		"S3AIBENCH_WORKLOAD_LANCE_QUERY_THREADS":  "bad",
 		"S3AIBENCH_WORKLOAD_LANCE_QUERY_DURATION": "bad",
 		"S3AIBENCH_WORKLOAD_LANCE_QUERY_WEIGHT":   "bad",

@@ -1,0 +1,61 @@
+name: reference-benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      endpoint:
+        description: S3 endpoint URL
+        required: true
+      region:
+        description: S3 region
+        required: true
+        default: us-east-1
+      bucket:
+        description: Existing benchmark bucket
+        required: true
+
+jobs:
+  reference:
+    runs-on: [self-hosted, s3aibench-reference]
+    env:
+      S3AIBENCH_ENDPOINT: ${{ inputs.endpoint }}
+      S3AIBENCH_REGION: ${{ inputs.region }}
+      S3AIBENCH_BUCKET: ${{ inputs.bucket }}
+      S3AIBENCH_OUTPUT_TEXT: ""
+      S3AIBENCH_OUTPUT_JSON: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+          cache: true
+      - name: Build
+        run: make build
+      - name: Validate reference plans
+        run: |
+          for p in plans/*.yaml; do
+            ./s3aibench validate --plan "$p"
+          done
+      - name: Run throughput target
+        run: |
+          mkdir -p reports/reference
+          ./s3aibench run --plan plans/perf-40gbps.yaml \
+            --output-text reports/reference/perf-40gbps.txt \
+            --output-json reports/reference/perf-40gbps.json \
+            --timeline=true
+      - name: Run IOPS target
+        run: |
+          ./s3aibench run --plan plans/perf-50kops.yaml \
+            --output-text reports/reference/perf-50kops.txt \
+            --output-json reports/reference/perf-50kops.json \
+            --timeline=true
+      - name: Run repeatability
+        run: |
+          scripts/repeatability.py --build --runs 3 \
+            --plan plans/reference-small-object.yaml \
+            --plan plans/reference-large-object.yaml \
+            -- --progress=false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reference-benchmark-reports
+          path: reports/

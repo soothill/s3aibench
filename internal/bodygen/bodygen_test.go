@@ -111,6 +111,87 @@ func TestReadWrapsEntropyBlock(t *testing.T) {
 	}
 }
 
+func TestReadHandlesLargeSingleRead(t *testing.T) {
+	size := int64(3*blockSize + 7)
+	r := NewReader(size)
+	defer Release(r)
+	buf := make([]byte, size)
+	n, err := io.ReadFull(r, buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(n) != size {
+		t.Fatalf("read %d want %d", n, size)
+	}
+	for offset := 0; offset < 3*blockSize; offset += blockSize {
+		if !bytes.Equal(buf[offset:offset+blockSize], entropy) {
+			t.Fatalf("block at %d did not repeat entropy", offset)
+		}
+	}
+	if !bytes.Equal(buf[3*blockSize:], entropy[:7]) {
+		t.Fatal("tail did not wrap correctly")
+	}
+}
+
+func TestReadAtHandlesLargeWrappedRead(t *testing.T) {
+	size := int64(4 * blockSize)
+	r := NewReader(size)
+	defer Release(r)
+
+	if _, err := r.Seek(12345, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := make([]byte, 1603904)
+	n, err := r.ReadAt(buf, blockSize-4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != len(buf) {
+		t.Fatalf("read %d want %d", n, len(buf))
+	}
+	if r.Len() != int(size-12345) {
+		t.Fatalf("ReadAt changed offset, len=%d", r.Len())
+	}
+	wantPrefix := append(append([]byte(nil), entropy[blockSize-4:]...), entropy[:4]...)
+	if !bytes.Equal(buf[:8], wantPrefix) {
+		t.Fatalf("prefix mismatch: got %x want %x", buf[:8], wantPrefix)
+	}
+	offset := len(buf) - 16
+	start := int((int64(blockSize-4) + int64(offset)) % blockSize)
+	if !bytes.Equal(buf[offset:], entropy[start:start+16]) {
+		t.Fatal("tail did not wrap correctly")
+	}
+}
+
+func TestReadAtShortRead(t *testing.T) {
+	r := NewReader(10)
+	defer Release(r)
+
+	buf := make([]byte, 4)
+	n, err := r.ReadAt(buf, 8)
+	if err != io.EOF {
+		t.Fatalf("err=%v want EOF", err)
+	}
+	if n != 2 {
+		t.Fatalf("read %d want 2", n)
+	}
+	if !bytes.Equal(buf[:2], entropy[8:10]) {
+		t.Fatalf("short read data mismatch: got %x want %x", buf[:2], entropy[8:10])
+	}
+}
+
+func TestReadAtErrors(t *testing.T) {
+	r := NewReader(10)
+	defer Release(r)
+	if _, err := r.ReadAt(make([]byte, 1), -1); err == nil {
+		t.Fatal("expected negative offset error")
+	}
+	if n, err := r.ReadAt(make([]byte, 1), 10); n != 0 || err != io.EOF {
+		t.Fatalf("ReadAt past end = %d, %v; want 0, EOF", n, err)
+	}
+}
+
 type zeroReader struct{}
 
 func (zeroReader) Read(p []byte) (int, error) { return 0, io.ErrUnexpectedEOF }
@@ -128,15 +209,19 @@ func TestFillEntropyErrorFallback(t *testing.T) {
 }
 
 func TestReaderIsReadSeeker(t *testing.T) {
-	// The AWS SDK's manager.Uploader streams multipart parts only when the
-	// body is an io.ReadSeeker; otherwise it buffers each part fully. Assert
-	// at compile+runtime that *Reader satisfies that interface so we never
-	// accidentally regress to the buffered path.
+	// Multipart uploads can stream independent section readers only when the
+	// body is an io.ReaderAt+io.ReadSeeker; otherwise they must read parts
+	// through the stateful Read path. Assert at compile+runtime that *Reader
+	// satisfies those interfaces so we never accidentally regress.
 	var _ io.ReadSeeker = NewReader(0)
+	var _ io.ReaderAt = NewReader(0)
 	r := NewReader(16)
 	defer Release(r)
 	if _, ok := interface{}(r).(io.ReadSeeker); !ok {
 		t.Fatal("bodygen.Reader must be an io.ReadSeeker for multipart streaming")
+	}
+	if _, ok := interface{}(r).(io.ReaderAt); !ok {
+		t.Fatal("bodygen.Reader must be an io.ReaderAt for multipart section reads")
 	}
 }
 

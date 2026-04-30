@@ -25,9 +25,14 @@ schema is versioned independently via `schema_version` (see
 - **M3 hardening.** HDR-histogram-backed metrics collector (1 ns – 1 h,
   3-sig-figure precision; 16-bucket percentile histogram in JSON).
   `sync.Pool`-backed `bufpool`. Live progress ticker (`output.progress`),
-  ASCII sparkline helper, `--pprof-addr`, `--log-level`. Release workflow
+  configurable progress interval, optional JSON/text timelines, ASCII
+  sparkline helper, `--pprof-addr`, `--log-level`. Release workflow
   (`linux/{amd64,arm64}`, `darwin/arm64`). Tuning, schema, and perf-harness
   docs.
+- **Milestone completion.** AWS SDK credential-chain resolution with inline
+  credential fallback, weighted top-level workload scheduling, per-workload
+  duration/thread overrides, expanded text reporting, and reference-result
+  evidence docs.
 - **Tests.** 100 % line coverage enforced by CI; `make coverage` is the
   gate.
 

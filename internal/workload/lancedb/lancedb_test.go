@@ -35,11 +35,20 @@ func build(t *testing.T, p plan.Workload) workload.Workload {
 func TestFactoryValidation(t *testing.T) {
 	workload.Reset()
 	Register()
-	if _, err := workload.Build(plan.Workload{
-		Name: "w", Type: TypeName,
-		Params: map[string]interface{}{"fragments": 0},
-	}); err == nil {
-		t.Fatal("expected error for fragments<=0")
+	for _, tc := range []map[string]interface{}{
+		{"fragments": 0},
+		{"fragment_size": 0},
+		{"manifest_min_size": 0},
+		{"manifest_min_size": 128, "manifest_max_size": 64},
+		{"range_min": 0},
+		{"range_min": 256, "range_max": 64},
+	} {
+		if _, err := workload.Build(plan.Workload{
+			Name: "w", Type: TypeName,
+			Params: tc,
+		}); err == nil {
+			t.Fatalf("expected error for params=%v", tc)
+		}
 	}
 }
 
@@ -290,10 +299,8 @@ func TestDoReadDispatchesAllShapes(t *testing.T) {
 	}
 	lw := w.(*Workload)
 	rs, _ := buildRange(env.Rand)
-	seeds := []int64{}
 	// Drive many reads with different seeds to ensure each kind=0,1,2 fires.
 	for i := int64(0); i < 100; i++ {
-		seeds = append(seeds, i)
 		lw.doRead(context.Background(), env, env.Recorder, rand.New(rand.NewSource(i)), rs)
 	}
 	snap := coll.Snapshot().Workloads["w"]
@@ -354,42 +361,7 @@ func TestNameAndType(t *testing.T) {
 }
 
 func TestHelpers(t *testing.T) {
-	if intParam(map[string]interface{}{"k": 7}, "k", 0) != 7 {
-		t.Fatal("intParam int")
-	}
-	if intParam(map[string]interface{}{"k": "nope"}, "k", 3) != 3 {
-		t.Fatal("intParam default")
-	}
-	if floatParam(map[string]interface{}{"k": 2.5}, "k", 0) != 2.5 {
-		t.Fatal("floatParam float")
-	}
-	if floatParam(map[string]interface{}{"k": 3}, "k", 0) != 3 {
-		t.Fatal("floatParam int")
-	}
-	if floatParam(map[string]interface{}{"k": "1.5"}, "k", 0) != 1.5 {
-		t.Fatal("floatParam string")
-	}
-	if floatParam(map[string]interface{}{"k": "bad"}, "k", 9) != 9 {
-		t.Fatal("floatParam bad string fallback")
-	}
-	if floatParam(nil, "k", 9) != 9 {
-		t.Fatal("floatParam missing")
-	}
-	if floatParam(map[string]interface{}{"k": false}, "k", 9) != 9 {
-		t.Fatal("floatParam bool fallback")
-	}
-	if sizeParam(map[string]interface{}{"k": float64(10)}, "k", 0) != 10 {
-		t.Fatal("sizeParam float")
-	}
-	if sizeParam(map[string]interface{}{"k": 7}, "k", 0) != 7 {
-		t.Fatal("sizeParam int")
-	}
-	if sizeParam(map[string]interface{}{"k": "n"}, "k", 3) != 3 {
-		t.Fatal("sizeParam bad-type default")
-	}
-	if sizeParam(nil, "k", 3) != 3 {
-		t.Fatal("sizeParam missing default")
-	}
+	// Helper coverage lives in internal/workload.
 }
 
 // buildRange constructs a tiny sampler for tests.

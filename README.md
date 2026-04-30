@@ -33,8 +33,6 @@ endpoint: http://localhost:9000
 region: us-east-1
 bucket: bench-scratch
 path_style: true
-access_key: minio
-secret_key: miniominio
 defaults:
   duration: 30s
   threads: 32
@@ -46,8 +44,12 @@ output:
   text: ./out.txt
   json: ./out.json
   progress: true
+  progress_interval: 1s
+  timeline: true
 YAML
 
+export AWS_ACCESS_KEY_ID='<access-key>'
+export AWS_SECRET_ACCESS_KEY='<secret-key>'
 s3aibench validate --plan plan.yaml
 s3aibench run       --plan plan.yaml
 ```
@@ -66,7 +68,8 @@ Top-level flags:
 - `--pprof-addr :6060` — bind `net/http/pprof` for profiling.
 - Per-subcommand: `--endpoint`, `--bucket`, `--threads`, `--duration`,
   `--warmup`, `--multipart-part-size`, `--multipart-concurrency`,
-  `--output-text`, `--output-json`, `--progress`, `--path-style`,
+  `--output-text`, `--output-json`, `--progress`, `--progress-interval`,
+  `--timeline`, `--path-style`,
   `--tls-skip-verify`, `--http2`, `--connection-pool-size`,
   `--prepopulate`, `--cleanup`, `--random-seed`, `--prefix`,
   `--log-level`, `--allow-shared-bucket`.
@@ -93,6 +96,8 @@ All plan fields can be overridden by `S3AIBENCH_*` env vars. Precedence
 | `S3AIBENCH_OUTPUT_TEXT`        | `output.text` |
 | `S3AIBENCH_OUTPUT_JSON`        | `output.json` |
 | `S3AIBENCH_PROGRESS`           | `output.progress` |
+| `S3AIBENCH_PROGRESS_INTERVAL`  | `output.progress_interval` |
+| `S3AIBENCH_TIMELINE`           | `output.timeline` |
 | `S3AIBENCH_RANDOM_SEED`        | `random_seed` |
 | `S3AIBENCH_LOG_LEVEL`          | `--log-level` |
 | `S3AIBENCH_PREFIX`             | Run prefix root (default `s3aibench/`) |
@@ -108,6 +113,11 @@ Workload names in env vars are uppercased and have `-` replaced by `_` —
 (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
 `AWS_PROFILE`). Inline `access_key`/`secret_key` in a plan are accepted but
 logged at `WARN`.
+
+Top-level workload `weight` fields are honored when a plan contains multiple
+workloads: explicit per-workload `threads` are reserved first, and remaining
+threads are divided by positive weight. Per-workload `duration` overrides the
+global default for that workload.
 
 ## Reference plans
 
@@ -127,6 +137,26 @@ Under `plans/`:
 [`pkg/reportschema`](./pkg/reportschema). The JSON schema is stable at
 `schema_version: "1.0.0"`.
 
+## Repeatability runs
+
+To rerun every plan under `plans/` multiple times and summarize run-to-run
+variability:
+
+```
+scripts/repeatability.py --build --runs 3
+```
+
+The script writes raw JSON/text/log artifacts under `reports/repeatability-*`
+and prints a Markdown summary with per-plan success counts plus per
+plan/workload/operation statistics: mean, standard deviation, coefficient of
+variation, min, max, and a repeatability band. Pass a subset with repeated
+`--plan` flags, and pass normal `s3aibench run` overrides after `--`, for
+example:
+
+```
+scripts/repeatability.py --runs 5 --plan plans/reference-small-object.yaml -- --duration 30s --warmup 5s
+```
+
 ## Testing and quality
 
 - **100 % line coverage** is enforced by CI via
@@ -136,6 +166,8 @@ Under `plans/`:
   runs a short MinIO-backed smoke run on every PR.
 - Cross-compiled artefacts for `linux/{amd64,arm64}` and `darwin/arm64` are
   built on tag push via `.github/workflows/release.yml`.
+- Manual reference benchmark workflows upload raw JSON/text artifacts; checked-in
+  reference evidence is summarized in [`docs/reference-results.md`](docs/reference-results.md).
 
 ## License
 

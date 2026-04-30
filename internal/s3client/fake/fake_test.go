@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,30 @@ func TestPutGetDelete(t *testing.T) {
 	}
 	if _, err := c.Get(ctx, "k"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected not found, got %v", err)
+	}
+}
+
+func TestDeleteMany(t *testing.T) {
+	c := New()
+	ctx := context.Background()
+	for _, key := range []string{"a", "b"} {
+		if err := c.Put(ctx, key, bytes.NewReader([]byte("x")), 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := c.DeleteMany(ctx, []string{"a", "b", "missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("deleted %d", n)
+	}
+	if len(c.Objects()) != 0 {
+		t.Fatalf("objects=%v", c.Objects())
+	}
+	c.FailOp("delete", errors.New("injected"))
+	if _, err := c.DeleteMany(ctx, []string{"x"}); err == nil {
+		t.Fatal("expected error")
 	}
 }
 
@@ -129,7 +154,7 @@ func TestDelay(t *testing.T) {
 	// Also cover Get/Head/Range/Multipart delay paths.
 	_, _ = c.Get(context.Background(), "k")
 	_, _ = c.Head(context.Background(), "k")
-	_, _ = c.RangeGet(context.Background(), "k", 0, 0)
+	_, _ = c.RangeGet(context.Background(), "k", 0, 1)
 	_ = c.MultipartUpload(context.Background(), "kk", bytes.NewReader(nil), 0)
 }
 
@@ -160,9 +185,38 @@ func TestRangeGet(t *testing.T) {
 	if len(b) != 0 {
 		t.Fatalf("got %q", b)
 	}
+	// overflow clamps to object end rather than wrapping the slice indexes
+	rc, err = c.RangeGet(ctx, "k", 1, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ = io.ReadAll(rc)
+	if string(b) != "bcdefg" {
+		t.Fatalf("got %q", b)
+	}
 	// missing key
 	if _, err := c.RangeGet(ctx, "missing", 0, 1); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestRangeGetInvalidRange(t *testing.T) {
+	c := New()
+	ctx := context.Background()
+	if err := c.Put(ctx, "k", bytes.NewReader([]byte("abcdefg")), 7); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		offset int64
+		length int64
+	}{
+		{offset: -1, length: 1},
+		{offset: 0, length: 0},
+		{offset: 0, length: -1},
+	} {
+		if _, err := c.RangeGet(ctx, "k", tc.offset, tc.length); err == nil {
+			t.Fatalf("expected error for offset=%d length=%d", tc.offset, tc.length)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/darrensoothill/s3aibench/internal/metrics"
 	"github.com/darrensoothill/s3aibench/internal/plan"
@@ -26,6 +27,9 @@ type Env struct {
 	RunPrefix   string
 	PartSize    int64
 	Concurrency int
+	// ShardCounter allocates globally unique metric shard IDs across the full
+	// run so concurrently active workloads do not contend on the same shard.
+	ShardCounter *atomic.Int64
 }
 
 // Workload is the pluggable interface every workload implements.
@@ -96,6 +100,19 @@ func WorkerRand(env *Env, workerID int) *rand.Rand {
 		return rand.New(rand.NewSource(WorkerSeed(0, workerID)))
 	}
 	return rand.New(rand.NewSource(WorkerSeed(env.Seed, workerID)))
+}
+
+// ShardRecorder returns a recorder for one worker goroutine. When the env was
+// created by the runner, shard IDs are allocated from a shared counter so
+// nested or concurrent workloads do not collide on the same metrics shard.
+func (e *Env) ShardRecorder(workerID int) metrics.Recorder {
+	if e == nil || e.Recorder == nil {
+		return nil
+	}
+	if e.ShardCounter != nil {
+		workerID = int(e.ShardCounter.Add(1) - 1)
+	}
+	return e.Recorder.ShardFor(workerID)
 }
 
 // AppendKeyDecimal appends `prefix` + decimal(n) into dst and returns the resulting string.

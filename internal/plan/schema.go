@@ -42,7 +42,9 @@ type Workload struct {
 }
 
 type Output struct {
-	Text     string `json:"text,omitempty"`
-	JSON     string `json:"json,omitempty"`
-	Progress bool   `json:"progress,omitempty"`
+	Text             string   `json:"text,omitempty"`
+	JSON             string   `json:"json,omitempty"`
+	Progress         bool     `json:"progress,omitempty"`
+	ProgressInterval Duration `json:"progress_interval,omitempty"`
+	Timeline         bool     `json:"timeline,omitempty"`
 }

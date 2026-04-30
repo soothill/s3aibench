@@ -224,6 +224,8 @@ Every plan field and CLI flag can also be set via environment variable. This is 
 | `S3AIBENCH_OUTPUT_TEXT` | `output.text` |
 | `S3AIBENCH_OUTPUT_JSON` | `output.json` |
 | `S3AIBENCH_PROGRESS` | `output.progress` |
+| `S3AIBENCH_PROGRESS_INTERVAL` | `output.progress_interval` |
+| `S3AIBENCH_TIMELINE` | `output.timeline` |
 | `S3AIBENCH_RANDOM_SEED` | `random_seed` |
 | `S3AIBENCH_LOG_LEVEL` | `--log-level` |
 | `S3AIBENCH_PREFIX` | Run prefix (default `s3aibench/<run-id>/`) |
@@ -312,7 +314,7 @@ The JSON report is always written if `output.json` is set, regardless of whether
 ### 9.2 Implementation
 
 - Written in Go (current stable release).
-- AWS SDK for Go v2, with the ability to pin to a specific SDK version via build tag.
+- AWS SDK for Go v2, pinned through `go.mod` for reproducible builds.
 - HTTP client tuned for high concurrency: large `MaxConnsPerHost`, HTTP/2 off by default (most S3 endpoints are HTTP/1.1), TCP keepalive enabled, no connection pooling limits below the OS `ulimit`.
 - Zero-allocation hot paths in the I/O loop where practical; `sync.Pool` for buffers.
 - Latency captured with `hdrhistogram-go` (or equivalent) for accurate tail percentiles without memory blow-up.
@@ -341,7 +343,7 @@ The JSON report is always written if `output.json` is set, regardless of whether
 
 - **Client-side saturation.** At 100 GbE+, the tool itself can become the bottleneck. Mitigation: profile-guided tuning and explicit NIC affinity docs. Open: do we need multi-NIC binding in v1?
 - **Workload realism drift.** LanceDB and checkpointing patterns will evolve. Mitigation: versioned workload definitions and a process for reviewing them against upstream libraries each quarter.
-- **Credential handling.** Keeping keys out of plans. Resolved: credentials follow standard AWS SDK resolution (env vars, shared config, IMDS, container provider); the tool has no credential-specific variables of its own. Open: do we warn loudly or hard-refuse if `access_key`/`secret_key` are set inline in a plan file?
+- **Credential handling.** Keeping keys out of plans. Resolved: credentials follow standard AWS SDK resolution (env vars, shared config, IMDS, container provider). Inline `access_key`/`secret_key` remain a compatibility fallback and produce a warning.
 - **Comparability to MLPerf Storage.** Customers may ask how our numbers relate. Mitigation: publish a mapping doc; do not claim MLPerf compliance.
 
 ## 12. Milestones

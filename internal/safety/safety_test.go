@@ -79,12 +79,30 @@ func TestCleanupListError(t *testing.T) {
 	}
 }
 
+func TestCleanupSingleListError(t *testing.T) {
+	wc := &listErrorClient{Client: fake.New()}
+	if _, err := Cleanup(context.Background(), wc, "s3aibench/"); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestCleanupDeleteError(t *testing.T) {
 	c := fake.New()
 	_ = c.Put(context.Background(), "s3aibench/k", bytes.NewReader([]byte{}), 0)
 	c.FailOp("delete", errors.New("server down"))
 	if _, err := Cleanup(context.Background(), c, "s3aibench/"); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestCleanupSingleDeleteError(t *testing.T) {
+	wc := &deleteErrorClient{Client: fake.New()}
+	n, err := Cleanup(context.Background(), wc, "s3aibench/")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if n != 0 {
+		t.Fatalf("deleted %d", n)
 	}
 }
 
@@ -96,6 +114,56 @@ func TestCleanupSkipsNotFound(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("expected 0 deleted, got %d", n)
+	}
+}
+
+func TestCleanupDeletesVersionsFirst(t *testing.T) {
+	c := fake.New()
+	_ = c.Put(context.Background(), "s3aibench/current", bytes.NewReader([]byte{}), 0)
+	wc := &versionCleaner{Client: c, deleted: 2}
+	n, err := Cleanup(context.Background(), wc, "s3aibench/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("deleted %d", n)
+	}
+	if !wc.called {
+		t.Fatal("version cleanup was not called")
+	}
+}
+
+func TestCleanupVersionError(t *testing.T) {
+	wc := &versionCleaner{Client: fake.New(), deleted: 2, err: errors.New("version delete down")}
+	n, err := Cleanup(context.Background(), wc, "s3aibench/")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if n != 2 {
+		t.Fatalf("deleted %d", n)
+	}
+}
+
+func TestCleanupBatchedTruncatedPagination(t *testing.T) {
+	wc := &batchTruncClient{}
+	n, err := Cleanup(context.Background(), wc, "s3aibench/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("deleted %d", n)
+	}
+	if wc.listCalls != 2 || wc.deleteCalls.Load() != 2 {
+		t.Fatalf("list calls=%d delete calls=%d", wc.listCalls, wc.deleteCalls.Load())
+	}
+}
+
+func TestListCleanupBatchesCanceledSend(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := listCleanupBatches(ctx, onePageClient{}, "s3aibench/", make(chan []string))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v", err)
 	}
 }
 

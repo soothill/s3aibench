@@ -65,6 +65,13 @@ func TestFactoryReadRatioParam(t *testing.T) {
 	}
 }
 
+func TestLoadKeysEmpty(t *testing.T) {
+	var w Workload
+	if keys := w.loadKeys(); keys != nil {
+		t.Fatalf("expected nil keys, got %v", keys)
+	}
+}
+
 func TestRunAndCleanup(t *testing.T) {
 	env, fc, coll := makeEnv(t, 2)
 	w := buildWL(t, plan.Workload{
@@ -159,6 +166,56 @@ func TestGetErrorPath(t *testing.T) {
 	got := coll.Snapshot().Workloads["w"][metrics.OpGet]
 	if got == nil || got.Errors == 0 {
 		t.Fatal("expected GET error recorded")
+	}
+}
+
+func TestReadersOnlyUseSuccessfullyWrittenKeys(t *testing.T) {
+	env, fc, coll := makeEnv(t, 1)
+	w := buildWL(t, plan.Workload{
+		Name: "w", Type: TypeName, ObjectSize: 4,
+		Params: map[string]interface{}{"read_ratio": 0.0},
+	}).(*Workload)
+	if err := w.Prepopulate(context.Background(), env); err != nil {
+		t.Fatal(err)
+	}
+
+	// Force the first measured PUT to fail so index reservation and key
+	// publication diverge.
+	fc.FailOp("put", errors.New("boom"))
+	writeCtx, writeCancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	defer writeCancel()
+	if err := w.Run(writeCtx, env); err != nil {
+		t.Fatal(err)
+	}
+
+	keys := w.loadKeys()
+	if len(keys) < 2 {
+		t.Fatalf("expected at least one successful measured write, got keys=%v", keys)
+	}
+	if _, ok := fc.Objects()["w/k-1"]; ok {
+		t.Fatal("expected failed key index to remain absent")
+	}
+	for _, key := range keys {
+		if _, ok := fc.Objects()[key]; !ok {
+			t.Fatalf("published missing key %q", key)
+		}
+	}
+
+	// Switch to pure reads: they should only target published keys, not the
+	// failed reservation.
+	w.readRatio = 1.0
+	readCtx, readCancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	defer readCancel()
+	if err := w.Run(readCtx, env); err != nil {
+		t.Fatal(err)
+	}
+
+	getStats := coll.Snapshot().Workloads["w"][metrics.OpGet]
+	if getStats == nil || getStats.Count == 0 {
+		t.Fatal("expected GET traffic")
+	}
+	if getStats.Errors != 0 {
+		t.Fatalf("unexpected GET errors after failed PUT publication: %+v", getStats)
 	}
 }
 

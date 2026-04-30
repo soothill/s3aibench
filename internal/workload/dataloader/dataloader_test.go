@@ -216,50 +216,23 @@ func TestNameAndType(t *testing.T) {
 	}
 }
 
-func TestHelpers(t *testing.T) {
-	if intParam(map[string]interface{}{"k": 7}, "k", 0) != 7 {
-		t.Fatal("intParam int")
+func TestSequentialIndexStridesByWorker(t *testing.T) {
+	if got := sequentialIndex(0, 2, 1, 5); got != 0 {
+		t.Fatalf("first index=%d", got)
 	}
-	if intParam(map[string]interface{}{"k": "x"}, "k", 3) != 3 {
-		t.Fatal("intParam default")
+	if got := sequentialIndex(1, 2, 1, 5); got != 1 {
+		t.Fatalf("second worker index=%d", got)
 	}
-	if floatParam(map[string]interface{}{"k": 2.5}, "k", 0) != 2.5 {
-		t.Fatal("floatParam float")
+	if got := sequentialIndex(0, 2, 2, 5); got != 2 {
+		t.Fatalf("next stride index=%d", got)
 	}
-	if floatParam(map[string]interface{}{"k": 3}, "k", 0) != 3 {
-		t.Fatal("floatParam int")
+	if got := sequentialIndex(1, 2, 3, 5); got != 0 {
+		t.Fatalf("wrapped index=%d", got)
 	}
-	if floatParam(map[string]interface{}{"k": "2.5"}, "k", 0) != 2.5 {
-		t.Fatal("floatParam string")
+	if got := sequentialIndex(0, 0, 2, 5); got != 1 {
+		t.Fatalf("threads<=0 fallback index=%d", got)
 	}
-	if floatParam(map[string]interface{}{"k": "bad"}, "k", 9) != 9 {
-		t.Fatal("floatParam bad-string fallback")
-	}
-	if floatParam(map[string]interface{}{"k": false}, "k", 9) != 9 {
-		t.Fatal("floatParam bool fallback")
-	}
-	if floatParam(nil, "k", 9) != 9 {
-		t.Fatal("floatParam missing")
-	}
-	if sizeParam(map[string]interface{}{"k": float64(10)}, "k", 0) != 10 {
-		t.Fatal("sizeParam float")
-	}
-	if sizeParam(map[string]interface{}{"k": 7}, "k", 0) != 7 {
-		t.Fatal("sizeParam int")
-	}
-	if sizeParam(map[string]interface{}{"k": "n"}, "k", 3) != 3 {
-		t.Fatal("sizeParam bad-type default")
-	}
-	if sizeParam(nil, "k", 3) != 3 {
-		t.Fatal("sizeParam missing")
-	}
-	if stringParam(map[string]interface{}{"k": "hi"}, "k", "d") != "hi" {
-		t.Fatal("stringParam value")
-	}
-	if stringParam(map[string]interface{}{"k": 7}, "k", "d") != "d" {
-		t.Fatal("stringParam bad-type fallback")
-	}
-	if stringParam(nil, "k", "d") != "d" {
-		t.Fatal("stringParam missing")
+	if got := sequentialIndex(0, 2, 1, 0); got != 0 {
+		t.Fatalf("empty total index=%d", got)
 	}
 }

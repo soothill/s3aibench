@@ -3,5 +3,9 @@
 /cover.out
 /cover.html
 /coverage.txt
+/reports/
+/.bench-zfs/
+/.tools/
+__pycache__/
 *.test
 *.prof

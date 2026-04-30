@@ -68,6 +68,40 @@ func TestFactoryParams(t *testing.T) {
 	}
 }
 
+func TestFactoryRejectsNegativeRetain(t *testing.T) {
+	workload.Reset()
+	Register()
+	if _, err := workload.Build(plan.Workload{
+		Name: "w", Type: TypeName, ObjectSize: 1024,
+		Params: map[string]interface{}{"retain_versions": -1},
+	}); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestResumeIsPaced(t *testing.T) {
+	env, _, coll := makeEnv(t, 1)
+	w := build(t, plan.Workload{
+		Name: "w", Type: TypeName, ObjectSize: 128,
+		Params: map[string]interface{}{
+			"writers":        1,
+			"burst_interval": "50ms",
+			"resume":         true,
+		},
+	})
+	if err := w.Prepopulate(context.Background(), env); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := w.Run(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	if got := coll.Snapshot().Workloads["w"][metrics.OpGet].Count; got > 1 {
+		t.Fatalf("resume GETs not paced: %d", got)
+	}
+}
+
 func TestBurstCycle(t *testing.T) {
 	env, fc, coll := makeEnv(t, 1)
 	w := build(t, plan.Workload{
@@ -210,31 +244,5 @@ func TestNameAndType(t *testing.T) {
 }
 
 func TestHelpers(t *testing.T) {
-	if intParam(map[string]interface{}{"k": 7}, "k", 0) != 7 {
-		t.Fatal("intParam int")
-	}
-	if intParam(nil, "k", 3) != 3 {
-		t.Fatal("intParam default")
-	}
-	if intParam(map[string]interface{}{"k": "wrong"}, "k", 9) != 9 {
-		t.Fatal("intParam bad-type default")
-	}
-	if !boolParam(map[string]interface{}{"k": true}, "k", false) {
-		t.Fatal("boolParam true")
-	}
-	if boolParam(map[string]interface{}{"k": 1}, "k", false) {
-		t.Fatal("boolParam bad-type default")
-	}
-	if durationParam(map[string]interface{}{"k": "1s"}, "k", 0) != time.Second {
-		t.Fatal("durationParam parse")
-	}
-	if durationParam(map[string]interface{}{"k": "bad"}, "k", time.Minute) != time.Minute {
-		t.Fatal("durationParam fallback")
-	}
-	if durationParam(nil, "k", time.Minute) != time.Minute {
-		t.Fatal("durationParam default")
-	}
-	if durationParam(map[string]interface{}{"k": 5}, "k", time.Minute) != time.Minute {
-		t.Fatal("durationParam non-string default")
-	}
+	// Helper coverage lives in internal/workload.
 }

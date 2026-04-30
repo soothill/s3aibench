@@ -46,8 +46,11 @@ type Config struct {
 	Prepopulate bool
 	Cleanup     bool
 	Progress    bool
+	Timeline    bool
 	RandomSeed  int64
 	LogLevel    string
+
+	ProgressInterval time.Duration
 
 	OutputText string
 	OutputJSON string
@@ -87,6 +90,8 @@ type Overrides struct {
 	OutputText           *string
 	OutputJSON           *string
 	Progress             *bool
+	Timeline             *bool
+	ProgressInterval     *time.Duration
 	PathStyle            *bool
 	TLSSkipVerify        *bool
 	ConnectionPoolSize   *int
@@ -121,6 +126,7 @@ func Resolve(p *plan.Plan, flags Overrides, env Environ) (*Config, error) {
 
 	pickDuration(cfg, "defaults.duration", &cfg.Duration, flags.Duration, env, "S3AIBENCH_DURATION", p.Defaults.Duration.AsDuration(), 60*time.Second)
 	pickDuration(cfg, "defaults.warmup", &cfg.Warmup, flags.Warmup, env, "S3AIBENCH_WARMUP", p.Defaults.Warmup.AsDuration(), 0)
+	pickDuration(cfg, "output.progress_interval", &cfg.ProgressInterval, flags.ProgressInterval, env, "S3AIBENCH_PROGRESS_INTERVAL", p.Output.ProgressInterval.AsDuration(), time.Second)
 
 	pickInt(cfg, "defaults.threads", &cfg.Threads, flags.Threads, env, "S3AIBENCH_THREADS", p.Defaults.Threads, 64)
 	pickInt64(cfg, "defaults.multipart_part_size", &cfg.MultipartPartSize, flags.MultipartPartSize, env, "S3AIBENCH_MULTIPART_PART_SIZE", int64(p.Defaults.MultipartPartSize), 16*1024*1024)
@@ -134,6 +140,7 @@ func Resolve(p *plan.Plan, flags Overrides, env Environ) (*Config, error) {
 	pickBool(cfg, "prepopulate", &cfg.Prepopulate, flags.Prepopulate, env, "S3AIBENCH_PREPOPULATE", p.Prepopulate, true)
 	pickBool(cfg, "cleanup", &cfg.Cleanup, flags.Cleanup, env, "S3AIBENCH_CLEANUP", p.Cleanup, true)
 	pickBool(cfg, "output.progress", &cfg.Progress, flags.Progress, env, "S3AIBENCH_PROGRESS", boolPtr(p.Output.Progress), false)
+	pickBool(cfg, "output.timeline", &cfg.Timeline, flags.Timeline, env, "S3AIBENCH_TIMELINE", boolPtr(p.Output.Timeline), false)
 	pickBool(cfg, "allow_shared_bucket", &cfg.AllowSharedBucket, flags.AllowSharedBucket, env, "S3AIBENCH_ALLOW_SHARED_BUCKET", nil, false)
 	pickInt(cfg, "max_retries", &cfg.MaxRetries, flags.MaxRetries, env, "S3AIBENCH_MAX_RETRIES", 0, 1)
 
@@ -197,6 +204,8 @@ func computeHash(c *Config) string {
 		Prepopulate          bool
 		Cleanup              bool
 		Progress             bool
+		Timeline             bool
+		ProgressInterval     int64
 		RandomSeed           int64
 		LogLevel             string
 		OutputText           string
@@ -222,6 +231,7 @@ func computeHash(c *Config) string {
 		Threads: c.Threads, MultipartPartSize: c.MultipartPartSize,
 		MultipartConcurrency: c.MultipartConcurrency,
 		Prepopulate:          c.Prepopulate, Cleanup: c.Cleanup, Progress: c.Progress,
+		Timeline: c.Timeline, ProgressInterval: int64(c.ProgressInterval),
 		RandomSeed: c.RandomSeed, LogLevel: c.LogLevel,
 		OutputText: c.OutputText, OutputJSON: c.OutputJSON,
 		AllowSharedBucket: c.AllowSharedBucket,

@@ -27,12 +27,24 @@ type Client interface {
 	MultipartUpload(ctx context.Context, key string, body io.Reader, size int64) error
 }
 
+// VersionedCleaner is optionally implemented by clients that can permanently
+// remove object versions and delete markers, not just current objects.
+type VersionedCleaner interface {
+	DeleteVersions(ctx context.Context, prefix string) (int, error)
+}
+
+// BatchDeleter is optionally implemented by clients that can delete multiple
+// keys in one request.
+type BatchDeleter interface {
+	DeleteMany(ctx context.Context, keys []string) (int, error)
+}
+
 // ListResult is a paginated LIST response.
 type ListResult struct {
-	Keys              []string
-	CommonPrefixes    []string
-	NextContinuation  string
-	IsTruncated       bool
+	Keys             []string
+	CommonPrefixes   []string
+	NextContinuation string
+	IsTruncated      bool
 }
 
 // joinPrefix prepends a run prefix exactly once, normalising double separators.

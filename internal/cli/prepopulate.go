@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"math/rand"
 
 	"github.com/darrensoothill/s3aibench/internal/workload"
 
@@ -25,6 +26,7 @@ func newPrepopulateCmd(_ context.Context) *cobra.Command {
 		if err != nil {
 			return err
 		}
+		logResolvedConfig(logger, cfg)
 		cfg.Prefix = cfg.Prefix + ulid.Make().String() + "/"
 
 		registerWorkloads()
@@ -37,7 +39,16 @@ func newPrepopulateCmd(_ context.Context) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("build workload %q: %w", entry.Name, err)
 			}
-			if err := w.Prepopulate(cmd.Context(), &workload.Env{S3: client, Threads: cfg.Threads, Logger: logger}); err != nil {
+			if err := w.Prepopulate(cmd.Context(), &workload.Env{
+				S3:          client,
+				Threads:     cfg.Threads,
+				Logger:      logger,
+				Rand:        rand.New(rand.NewSource(cfg.RandomSeed + 1)),
+				Seed:        cfg.RandomSeed,
+				RunPrefix:   cfg.Prefix,
+				PartSize:    cfg.MultipartPartSize,
+				Concurrency: cfg.MultipartConcurrency,
+			}); err != nil {
 				return err
 			}
 		}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/darrensoothill/s3aibench/internal/config"
 	"github.com/darrensoothill/s3aibench/internal/metrics"
+	"github.com/darrensoothill/s3aibench/internal/plan"
 	"github.com/darrensoothill/s3aibench/pkg/reportschema"
 )
 
@@ -30,7 +31,9 @@ func mkCfg() *config.Config {
 }
 
 func TestBuild(t *testing.T) {
-	r := Build(mkSnap(), mkCfg())
+	cfg := mkCfg()
+	cfg.Workloads = []plan.Workload{{Name: "w", Type: "smallobject"}}
+	r := Build(mkSnap(), cfg)
 	if r.SchemaVersion != reportschema.SchemaVersion {
 		t.Fatal("bad schema version")
 	}
@@ -42,6 +45,9 @@ func TestBuild(t *testing.T) {
 	}
 	if len(r.Errors) == 0 {
 		t.Fatal("expected errors")
+	}
+	if r.Workloads[0].Type != "smallobject" {
+		t.Fatalf("type=%q", r.Workloads[0].Type)
 	}
 }
 
@@ -61,7 +67,9 @@ func TestBuildZeroDuration(t *testing.T) {
 }
 
 func TestWriteTextAndJSON(t *testing.T) {
-	r := Build(mkSnap(), mkCfg())
+	cfg := mkCfg()
+	cfg.Timeline = true
+	r := Build(mkSnap(), cfg)
 	var txt, js bytes.Buffer
 	if err := WriteText(&txt, r); err != nil {
 		t.Fatal(err)
@@ -71,6 +79,9 @@ func TestWriteTextAndJSON(t *testing.T) {
 	}
 	if !strings.Contains(txt.String(), "top errors") {
 		t.Fatalf("missing errors section: %s", txt.String())
+	}
+	if !strings.Contains(txt.String(), "p999=") {
+		t.Fatalf("missing expanded latency fields: %s", txt.String())
 	}
 	if err := WriteJSON(&js, r); err != nil {
 		t.Fatal(err)
@@ -84,6 +95,58 @@ func TestWriteTextAndJSON(t *testing.T) {
 	}
 }
 
+func TestBuildTimelineAndNestedWorkloadType(t *testing.T) {
+	c := metrics.NewCollector()
+	c.Record("child", metrics.OpGet, time.Millisecond, 1, nil)
+	cfg := mkCfg()
+	cfg.Timeline = true
+	cfg.Duration = time.Second
+	cfg.Workloads = []plan.Workload{{
+		Name: "mix", Type: "mix", Params: map[string]interface{}{
+			"workloads": []interface{}{
+				map[string]interface{}{"name": "child", "type": "training_data"},
+			},
+		},
+	}}
+	r := Build(c.Snapshot(), cfg)
+	if r.Workloads[0].Type != "training_data" {
+		t.Fatalf("type=%q", r.Workloads[0].Type)
+	}
+	if len(r.Workloads[0].Operations["get"].Timeline) == 0 {
+		t.Fatal("expected timeline")
+	}
+}
+
+func TestNestedWorkloadsSkipsInvalidItems(t *testing.T) {
+	w := plan.Workload{Params: map[string]interface{}{
+		"workloads": []interface{}{
+			"bad",
+			map[string]interface{}{"name": "", "type": "x"},
+			map[string]interface{}{"name": "ok", "type": "smallobject"},
+		},
+	}}
+	got := nestedWorkloads(w)
+	if len(got) != 1 || got[0].Name != "ok" {
+		t.Fatalf("nested=%+v", got)
+	}
+}
+
+func TestBuildTimelineEmpty(t *testing.T) {
+	if got := buildTimeline(nil); got != nil {
+		t.Fatalf("expected nil, got %+v", got)
+	}
+}
+
+func TestBuildTimelineSorts(t *testing.T) {
+	got := buildTimeline(map[int64]metrics.TimelineBucket{
+		2: {Second: 2, Ops: 2},
+		1: {Second: 1, Ops: 1},
+	})
+	if got[0].Second != 1 || got[1].Second != 2 {
+		t.Fatalf("not sorted: %+v", got)
+	}
+}
+
 func TestWriteTextNoErrorsSection(t *testing.T) {
 	r := &reportschema.Report{SchemaVersion: "1.0.0", Workloads: []reportschema.Workload{{Name: "w", Type: "t", Operations: map[string]*reportschema.Operation{"put": {Count: 1}}}}}
 	var buf bytes.Buffer
@@ -92,6 +155,50 @@ func TestWriteTextNoErrorsSection(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "top errors") {
 		t.Fatal("unexpected errors section")
+	}
+}
+
+func TestWriteTextSortsAndTruncatesErrors(t *testing.T) {
+	errs := make([]reportschema.Error, 0, 12)
+	for i := 0; i < 12; i++ {
+		errs = append(errs, reportschema.Error{Op: "op", Code: string(rune('a' + i)), Count: int64(i)})
+	}
+	errs = append(errs, reportschema.Error{Op: "aa", Code: "z", Count: 5})
+	errs = append(errs, reportschema.Error{Op: "same", Code: "b", Count: 50})
+	errs = append(errs, reportschema.Error{Op: "same", Code: "a", Count: 50})
+	r := &reportschema.Report{
+		SchemaVersion: "1.0.0",
+		Errors:        errs,
+		Workloads: []reportschema.Workload{{
+			Name: "w", Type: "t",
+			Operations: map[string]*reportschema.Operation{
+				"put": {Count: 1, Timeline: []reportschema.TimelineBucket{{Second: 0, Ops: 1}}},
+			},
+		}},
+	}
+	var buf bytes.Buffer
+	if err := WriteText(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(buf.String(), "op=") != 10 {
+		t.Fatalf("expected 10 top errors: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "timeline=") {
+		t.Fatalf("missing timeline: %s", buf.String())
+	}
+}
+
+func TestWriteTextTimelineWriterError(t *testing.T) {
+	r := &reportschema.Report{SchemaVersion: "1.0.0", Workloads: []reportschema.Workload{{
+		Name: "w", Type: "t",
+		Operations: map[string]*reportschema.Operation{
+			"put": {Count: 1, Timeline: []reportschema.TimelineBucket{{Second: 0, Ops: 1}}},
+		},
+	}}}
+	counter := &failAtWriter{failOn: 99999}
+	_ = WriteText(counter, r)
+	if err := WriteText(&failAtWriter{failOn: counter.calls}, r); err == nil {
+		t.Fatal("expected timeline write error")
 	}
 }
 

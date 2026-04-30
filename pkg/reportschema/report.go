@@ -31,11 +31,19 @@ type Workload struct {
 }
 
 type Operation struct {
-	Count         int64   `json:"count"`
-	Errors        int64   `json:"errors"`
-	Bytes         int64   `json:"bytes"`
-	ThroughputBps float64 `json:"throughput_bps"`
-	LatencyNS     Latency `json:"latency_ns"`
+	Count         int64            `json:"count"`
+	Errors        int64            `json:"errors"`
+	Bytes         int64            `json:"bytes"`
+	ThroughputBps float64          `json:"throughput_bps"`
+	LatencyNS     Latency          `json:"latency_ns"`
+	Timeline      []TimelineBucket `json:"timeline,omitempty"`
+}
+
+type TimelineBucket struct {
+	Second int64 `json:"second"`
+	Ops    int64 `json:"ops"`
+	Bytes  int64 `json:"bytes"`
+	Errors int64 `json:"errors"`
 }
 
 type Latency struct {

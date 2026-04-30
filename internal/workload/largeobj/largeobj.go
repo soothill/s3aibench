@@ -80,7 +80,7 @@ func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 		go func(id int) {
 			defer wg.Done()
 			local := workload.WorkerRand(env, id)
-			rec := env.Recorder.ShardFor(id)
+			rec := env.ShardRecorder(id)
 			for ctx.Err() == nil {
 				if local.Float64() < w.readRatio {
 					cnt := w.writtenCount.Load()

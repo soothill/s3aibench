@@ -40,9 +40,14 @@ and run with `ulimit -n 1048576`. See [`docs/tuning.md`](../docs/tuning.md).
 Report both the `config_hash` and the git SHA of the binary in every
 published number.
 
-## Expected results (placeholder — to be populated)
+## Reference evidence
+
+Raw reference JSON/text outputs are uploaded by the manual reference benchmark
+workflow. Sanitized, checked-in summaries live in
+[`docs/reference-results.md`](../docs/reference-results.md); do not commit raw
+generated reports under `reports/`.
 
 | Plan              | Measured throughput | p99 client overhead |
 |-------------------|---------------------|---------------------|
-| `perf-40gbps.yaml`  | *TBD*            | *TBD* |
-| `perf-50kops.yaml`  | *TBD*            | *TBD* |
+| `perf-40gbps.yaml`  | See reference summary | See reference summary |
+| `perf-50kops.yaml`  | See reference summary | See reference summary |
