@@ -160,6 +160,18 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+func (c *Client) DeleteMany(ctx context.Context, keys []string) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.checkFail("delete"); err != nil {
+		return 0, err
+	}
+	for _, key := range keys {
+		delete(c.objects, key)
+	}
+	return len(keys), nil
+}
+
 func (c *Client) List(ctx context.Context, prefix, delimiter, token string, maxKeys int32) (*s3client.ListResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -19,6 +20,7 @@ import (
 )
 
 type handler struct {
+	mu      sync.Mutex
 	t       *testing.T
 	seenReq []string
 
@@ -35,9 +37,21 @@ type handler struct {
 	deleteObjectsStatus  int
 	deleteObjectsErrors  bool
 	deleteObjectsCalls   int
+
+	multipartCreateStatus  int
+	multipartCreateEmptyID bool
+	multipartCreateCalls   int
+	uploadPartStatus       int
+	uploadPartCalls        int
+	completeStatus         int
+	completeCalls          int
+	abortStatus            int
+	abortCalls             int
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.seenReq = append(h.seenReq, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
 	q := r.URL.Query()
 	if s, ok := h.statusByKey[r.URL.Path]; ok {
@@ -72,6 +86,38 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fmt.Fprint(w, `<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></DeleteResult>`)
+	case r.Method == "POST" && q.Has("uploads"):
+		h.multipartCreateCalls++
+		if h.multipartCreateStatus != 0 {
+			w.WriteHeader(h.multipartCreateStatus)
+			fmt.Fprint(w, `<Error><Code>InternalError</Code><Message>boom</Message></Error>`)
+			return
+		}
+		uploadID := "upload-1"
+		if h.multipartCreateEmptyID {
+			uploadID = ""
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprintf(w, `<InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>b</Bucket><Key>p/k</Key><UploadId>%s</UploadId></InitiateMultipartUploadResult>`, uploadID)
+	case r.Method == "PUT" && q.Has("partNumber") && q.Has("uploadId"):
+		h.uploadPartCalls++
+		if h.uploadPartStatus != 0 {
+			w.WriteHeader(h.uploadPartStatus)
+			fmt.Fprint(w, `<Error><Code>InternalError</Code><Message>boom</Message></Error>`)
+			return
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("ETag", `"part-`+q.Get("partNumber")+`"`)
+		w.WriteHeader(200)
+	case r.Method == "POST" && q.Has("uploadId"):
+		h.completeCalls++
+		if h.completeStatus != 0 {
+			w.WriteHeader(h.completeStatus)
+			fmt.Fprint(w, `<Error><Code>InternalError</Code><Message>boom</Message></Error>`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><ETag>"complete"</ETag></CompleteMultipartUploadResult>`)
 	case r.Method == "PUT" && q.Has("tagging"):
 		// PutObjectTagging
 		w.WriteHeader(200)
@@ -103,6 +149,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Length", h.headLen)
 		}
 		w.WriteHeader(200)
+	case r.Method == "DELETE" && q.Has("uploadId"):
+		h.abortCalls++
+		if h.abortStatus != 0 {
+			w.WriteHeader(h.abortStatus)
+			fmt.Fprint(w, `<Error><Code>InternalError</Code><Message>boom</Message></Error>`)
+			return
+		}
+		w.WriteHeader(204)
 	case r.Method == "DELETE":
 		w.WriteHeader(204)
 	default:
@@ -287,6 +341,53 @@ func TestAWSDelete(t *testing.T) {
 	}
 }
 
+func TestAWSDeleteMany(t *testing.T) {
+	h := &handler{t: t}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	n, err := a.DeleteMany(context.Background(), []string{"k1", "p/k2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("deleted %d", n)
+	}
+	if h.deleteObjectsCalls != 1 {
+		t.Fatalf("delete objects calls=%d", h.deleteObjectsCalls)
+	}
+	n, err = a.DeleteMany(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("empty delete deleted %d", n)
+	}
+
+	keys := make([]string, 1001)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("bulk-%d", i)
+	}
+	n, err = a.DeleteMany(context.Background(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1001 {
+		t.Fatalf("bulk deleted %d", n)
+	}
+	if h.deleteObjectsCalls != 3 {
+		t.Fatalf("delete objects calls=%d", h.deleteObjectsCalls)
+	}
+}
+
+func TestAWSDeleteManyError(t *testing.T) {
+	h := &handler{t: t, deleteObjectsErrors: true}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	if _, err := a.DeleteMany(context.Background(), []string{"k"}); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestAWSDeleteVersions(t *testing.T) {
 	h := &handler{t: t, versionListResponses: []string{
 		listVersionsXML(true, "p/k2", "d1"),
@@ -436,9 +537,139 @@ func TestAWSMultipartUpload_SinglePart(t *testing.T) {
 	h := &handler{t: t}
 	a, srv := newAWSTestClient(t, h)
 	defer srv.Close()
-	// With default PartSize threshold, a small body routes through PutObject.
+	// Bodies at or below the part-size threshold route through PutObject.
 	if err := a.MultipartUpload(context.Background(), "k", bytes.NewReader([]byte("hi")), 2); err != nil {
 		t.Fatal(err)
+	}
+	if h.multipartCreateCalls != 0 {
+		t.Fatalf("unexpected multipart create calls=%d", h.multipartCreateCalls)
+	}
+}
+
+func TestAWSMultipartUpload_ReaderAt(t *testing.T) {
+	h := &handler{t: t}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	a.partSize = 2
+	a.multipartConcurrency = 2
+	if err := a.MultipartUpload(context.Background(), "k", bytes.NewReader([]byte("hello")), 5); err != nil {
+		t.Fatal(err)
+	}
+	if h.multipartCreateCalls != 1 || h.uploadPartCalls != 3 || h.completeCalls != 1 || h.abortCalls != 0 {
+		t.Fatalf("create=%d parts=%d complete=%d abort=%d", h.multipartCreateCalls, h.uploadPartCalls, h.completeCalls, h.abortCalls)
+	}
+}
+
+func TestAWSMultipartUpload_ReaderOnly(t *testing.T) {
+	h := &handler{t: t}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	a.partSize = 2
+	if err := a.MultipartUpload(context.Background(), "k", readOnly{strings.NewReader("hello")}, 5); err != nil {
+		t.Fatal(err)
+	}
+	if h.uploadPartCalls != 3 {
+		t.Fatalf("upload parts=%d", h.uploadPartCalls)
+	}
+}
+
+func TestAWSMultipartUploadInvalidSize(t *testing.T) {
+	h := &handler{t: t}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	if err := a.MultipartUpload(context.Background(), "k", bytes.NewReader(nil), -1); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestAWSMultipartUploadCreateError(t *testing.T) {
+	h := &handler{t: t, multipartCreateStatus: 500}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	a.partSize = 2
+	if err := a.MultipartUpload(context.Background(), "k", bytes.NewReader([]byte("hello")), 5); err == nil {
+		t.Fatal("expected error")
+	}
+	if h.abortCalls != 0 {
+		t.Fatalf("abort calls=%d", h.abortCalls)
+	}
+}
+
+func TestAWSMultipartUploadEmptyUploadID(t *testing.T) {
+	h := &handler{t: t, multipartCreateEmptyID: true}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	a.partSize = 2
+	if err := a.MultipartUpload(context.Background(), "k", bytes.NewReader([]byte("hello")), 5); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestAWSMultipartUploadPartErrorAborts(t *testing.T) {
+	h := &handler{t: t, uploadPartStatus: 500}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	a.partSize = 2
+	if err := a.MultipartUpload(context.Background(), "k", bytes.NewReader([]byte("hello")), 5); err == nil {
+		t.Fatal("expected error")
+	}
+	if h.abortCalls != 1 {
+		t.Fatalf("abort calls=%d", h.abortCalls)
+	}
+}
+
+func TestAWSMultipartUploadCompleteErrorAborts(t *testing.T) {
+	h := &handler{t: t, completeStatus: 500}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	a.partSize = 2
+	if err := a.MultipartUpload(context.Background(), "k", bytes.NewReader([]byte("hello")), 5); err == nil {
+		t.Fatal("expected error")
+	}
+	if h.abortCalls != 1 {
+		t.Fatalf("abort calls=%d", h.abortCalls)
+	}
+}
+
+func TestAWSMultipartUploadAbortErrorJoined(t *testing.T) {
+	h := &handler{t: t, completeStatus: 500, abortStatus: 500}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	a.partSize = 2
+	err := a.MultipartUpload(context.Background(), "k", bytes.NewReader([]byte("hello")), 5)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "abort multipart upload") {
+		t.Fatalf("expected joined abort error, got %v", err)
+	}
+}
+
+func TestAWSMultipartUploadReaderOnlyReadErrorAborts(t *testing.T) {
+	h := &handler{t: t}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	a.partSize = 2
+	err := a.MultipartUpload(context.Background(), "k", errReader{}, 5)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if h.abortCalls != 1 {
+		t.Fatalf("abort calls=%d", h.abortCalls)
+	}
+}
+
+func TestAWSMultipartUploadReaderOnlyUploadErrorAborts(t *testing.T) {
+	h := &handler{t: t, uploadPartStatus: 500}
+	a, srv := newAWSTestClient(t, h)
+	defer srv.Close()
+	a.partSize = 2
+	err := a.MultipartUpload(context.Background(), "k", readOnly{strings.NewReader("hello")}, 5)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if h.abortCalls != 1 {
+		t.Fatalf("abort calls=%d", h.abortCalls)
 	}
 }
 
@@ -492,6 +723,16 @@ func TestIsNotFound(t *testing.T) {
 		t.Fatalf("unexpected IsNotFound for non-404 error: %v", err)
 	}
 }
+
+type readOnly struct {
+	r *strings.Reader
+}
+
+func (r readOnly) Read(p []byte) (int, error) { return r.r.Read(p) }
+
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("boom") }
 
 // ensure aws import used in all paths
 var _ = aws.String

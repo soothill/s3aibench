@@ -33,6 +33,12 @@ type VersionedCleaner interface {
 	DeleteVersions(ctx context.Context, prefix string) (int, error)
 }
 
+// BatchDeleter is optionally implemented by clients that can delete multiple
+// keys in one request.
+type BatchDeleter interface {
+	DeleteMany(ctx context.Context, keys []string) (int, error)
+}
+
 // ListResult is a paginated LIST response.
 type ListResult struct {
 	Keys             []string

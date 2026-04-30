@@ -36,6 +36,30 @@ func TestPutGetDelete(t *testing.T) {
 	}
 }
 
+func TestDeleteMany(t *testing.T) {
+	c := New()
+	ctx := context.Background()
+	for _, key := range []string{"a", "b"} {
+		if err := c.Put(ctx, key, bytes.NewReader([]byte("x")), 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := c.DeleteMany(ctx, []string{"a", "b", "missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("deleted %d", n)
+	}
+	if len(c.Objects()) != 0 {
+		t.Fatalf("objects=%v", c.Objects())
+	}
+	c.FailOp("delete", errors.New("injected"))
+	if _, err := c.DeleteMany(ctx, []string{"x"}); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestPutNegativeSize(t *testing.T) {
 	c := New()
 	if err := c.Put(context.Background(), "k", bytes.NewReader([]byte("abc")), -1); err != nil {

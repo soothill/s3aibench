@@ -8,11 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
-	"sync"
 
 	"github.com/darrensoothill/s3aibench/internal/plan"
 	"github.com/darrensoothill/s3aibench/internal/workload"
+	"golang.org/x/sync/errgroup"
 )
 
 // TypeName is the YAML type: value.
@@ -114,32 +113,25 @@ func (w *Workload) Run(ctx context.Context, env *workload.Env) error {
 	if total <= 0 {
 		return fmt.Errorf("mix %q: total weight must be >0", w.name)
 	}
-	var wg sync.WaitGroup
-	errCh := make(chan error, len(w.children))
+	group, groupCtx := errgroup.WithContext(ctx)
 	alloc := allocateThreads(env.Threads, w.weights)
 	for i, c := range w.children {
 		threads := alloc[i]
 		if threads == 0 {
 			continue
 		}
-		wg.Add(1)
 		childEnv := *env
 		childEnv.Threads = threads
-		go func(child workload.Workload, cenv workload.Env) {
-			defer wg.Done()
-			if err := child.Run(ctx, &cenv); err != nil && ctx.Err() == nil {
-				errCh <- err
+		child := c
+		group.Go(func() error {
+			if err := child.Run(groupCtx, &childEnv); err != nil && groupCtx.Err() == nil {
+				return fmt.Errorf("child %q: %w", child.Name(), err)
 			}
-		}(c, childEnv)
+			return nil
+		})
 	}
-	wg.Wait()
-	close(errCh)
-	var errs []string
-	for e := range errCh {
-		errs = append(errs, e.Error())
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("mix %q child errors: %s", w.name, strings.Join(errs, "; "))
+	if err := group.Wait(); err != nil {
+		return fmt.Errorf("mix %q child errors: %w", w.name, err)
 	}
 	return nil
 }

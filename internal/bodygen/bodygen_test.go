@@ -209,8 +209,8 @@ func TestFillEntropyErrorFallback(t *testing.T) {
 }
 
 func TestReaderIsReadSeeker(t *testing.T) {
-	// The AWS SDK's manager.Uploader streams multipart parts only when the
-	// body is an io.ReaderAt+io.ReadSeeker; otherwise it buffers each part
+	// Multipart uploads can stream independent section readers only when the
+	// body is an io.ReaderAt+io.ReadSeeker; otherwise they must read parts
 	// through the stateful Read path. Assert at compile+runtime that *Reader
 	// satisfies those interfaces so we never accidentally regress.
 	var _ io.ReadSeeker = NewReader(0)

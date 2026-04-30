@@ -26,8 +26,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.26.1'
           cache: true
+      - name: lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.4
+          args: --timeout=5m
       - name: go vet
         run: go vet ./...
       - name: coverage gate
@@ -77,6 +82,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.26.1'
           cache: true
       - run: make cross

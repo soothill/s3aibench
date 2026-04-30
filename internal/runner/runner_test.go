@@ -91,8 +91,11 @@ func TestRunRecordsPrepopulateError(t *testing.T) {
 		Duration:    5 * time.Millisecond,
 		Prepopulate: true,
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("expected prepopulate error")
+	}
+	if res == nil {
+		t.Fatal("expected result with error")
 	}
 	if len(res.Errors) != 1 {
 		t.Fatalf("want 1 error, got %v", res.Errors)
@@ -102,12 +105,15 @@ func TestRunRecordsPrepopulateError(t *testing.T) {
 func TestRunLogsRunError(t *testing.T) {
 	w := &spyWL{name: "w", runErr: errors.New("fail")}
 	rec := metrics.NewCollector()
-	_, err := Run(context.Background(), Options{
+	res, err := Run(context.Background(), Options{
 		Recorder: rec, Workloads: []workload.Workload{w},
 		Duration: 5 * time.Millisecond, Logger: slog.Default(),
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("expected run error")
+	}
+	if len(res.Errors) != 1 {
+		t.Fatalf("want 1 error, got %v", res.Errors)
 	}
 }
 

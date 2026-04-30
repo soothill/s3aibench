@@ -299,10 +299,8 @@ func TestDoReadDispatchesAllShapes(t *testing.T) {
 	}
 	lw := w.(*Workload)
 	rs, _ := buildRange(env.Rand)
-	seeds := []int64{}
 	// Drive many reads with different seeds to ensure each kind=0,1,2 fires.
 	for i := int64(0); i < 100; i++ {
-		seeds = append(seeds, i)
 		lw.doRead(context.Background(), env, env.Recorder, rand.New(rand.NewSource(i)), rs)
 	}
 	snap := coll.Snapshot().Workloads["w"]

@@ -6,9 +6,9 @@
 // objects larger than 1 MiB. Reader structs are pooled via sync.Pool, so the
 // only per-request cost is an atomic pool Get/Put and a few field writes.
 //
-// Reader implements io.ReaderAt and io.ReadSeeker, which lets manager.Uploader
-// stream multipart parts from independent section readers instead of sharing
-// the stateful Read offset across multipart worker goroutines.
+// Reader implements io.ReaderAt and io.ReadSeeker, which lets multipart
+// uploads stream independent section readers instead of sharing the stateful
+// Read offset across worker goroutines.
 package bodygen
 
 import (
@@ -120,7 +120,7 @@ func fill(dst []byte, offset int64) {
 	}
 }
 
-// Seek implements io.Seeker, enabling manager.Uploader's streaming path.
+// Seek implements io.Seeker, enabling streaming multipart upload paths.
 func (r *Reader) Seek(offset int64, whence int) (int64, error) {
 	var abs int64
 	switch whence {

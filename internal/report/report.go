@@ -90,8 +90,7 @@ func workloadTypeFor(types map[string]string, name string) string {
 
 func mapWorkloadTypes(wls []plan.Workload) map[string]string {
 	out := map[string]string{}
-	var walk func([]plan.Workload)
-	walk = func(items []plan.Workload) {
+	walk := func(items []plan.Workload) {
 		for _, w := range items {
 			out[w.Name] = w.Type
 			for _, child := range nestedWorkloads(w) {

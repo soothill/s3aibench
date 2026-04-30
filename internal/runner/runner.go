@@ -1,20 +1,20 @@
-// Package runner orchestrates warmup → measurement execution across a set of
-// workloads. M0 launches them sequentially; M2 will add concurrent weighted
-// composites.
+// Package runner orchestrates warmup -> measurement execution across a set of
+// workloads.
 package runner
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/darrensoothill/s3aibench/internal/metrics"
 	"github.com/darrensoothill/s3aibench/internal/s3client"
 	"github.com/darrensoothill/s3aibench/internal/workload"
+	"golang.org/x/sync/errgroup"
 )
 
 // Options describes a single Run invocation.
@@ -46,9 +46,9 @@ type Result struct {
 	Errors []error
 }
 
-// Run performs warmup (if any) then drives each workload for `Duration`.
-// Workloads are executed sequentially in M0. Each workload uses a fresh rand
-// seeded deterministically from Opts.Seed so runs are reproducible.
+// Run performs warmup (if any) then drives each workload for its configured
+// duration. Each workload gets a fresh rand seeded deterministically from
+// Opts.Seed so runs are reproducible.
 func Run(ctx context.Context, opt Options) (*Result, error) {
 	if opt.Recorder == nil {
 		return nil, errors.New("runner: recorder required")
@@ -108,41 +108,48 @@ func Run(ctx context.Context, opt Options) (*Result, error) {
 				opt.Logger.Error("prepopulate failed", "workload", spec.Workload.Name(), "err", err)
 			}
 		}
+		if len(res.Errors) > 0 {
+			return res, errors.Join(res.Errors...)
+		}
 	}
 
 	if opt.Warmup > 0 {
 		warmCtx, cancel := context.WithTimeout(ctx, opt.Warmup)
-		runConcurrent(warmCtx, specs, mkEnv, metricsDiscard{}, opt.Logger, false)
+		_ = runConcurrent(warmCtx, specs, mkEnv, metricsDiscard{}, opt.Logger, false)
 		cancel()
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	runConcurrent(runCtx, specs, mkEnv, opt.Recorder, opt.Logger, true)
+	if err := runConcurrent(runCtx, specs, mkEnv, opt.Recorder, opt.Logger, true); err != nil {
+		res.Errors = append(res.Errors, err)
+		return res, err
+	}
 	return res, nil
 }
 
 func runConcurrent(ctx context.Context, specs []WorkloadSpec,
-	mkEnv func(int, int) *workload.Env, rec metrics.Recorder, logger *slog.Logger, useSpecDuration bool) {
-	var wg sync.WaitGroup
-	wg.Add(len(specs))
+	mkEnv func(int, int) *workload.Env, rec metrics.Recorder, logger *slog.Logger, useSpecDuration bool) error {
+	group, groupCtx := errgroup.WithContext(ctx)
 	for i, spec := range specs {
-		go func(i int, spec WorkloadSpec) {
-			defer wg.Done()
-			runCtx := ctx
+		i, spec := i, spec
+		group.Go(func() error {
+			runCtx := groupCtx
 			var cancel context.CancelFunc
 			if useSpecDuration {
-				runCtx, cancel = context.WithTimeout(ctx, spec.Duration)
+				runCtx, cancel = context.WithTimeout(groupCtx, spec.Duration)
 				defer cancel()
 			}
 			env := mkEnv(i, spec.Threads)
 			env.Recorder = rec
 			if err := spec.Workload.Run(runCtx, env); err != nil && runCtx.Err() == nil {
 				logger.Error("workload run failed", "workload", spec.Workload.Name(), "err", err)
+				return fmt.Errorf("workload %q: %w", spec.Workload.Name(), err)
 			}
-		}(i, spec)
+			return nil
+		})
 	}
-	wg.Wait()
+	return group.Wait()
 }
 
 // metricsDiscard is a Recorder that drops every call — used during warmup.
